@@ -47,10 +47,8 @@ const startServer = async () => {
 const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:5174",
-    "https://betterbiz.netlify.app",
-    "https://biznafitty.com",
-    "http://nairobikukukienyeji.com",
-    "https://gloriouspalacehotel.co.ke"
+    "https://milik.com",
+    
 ];
 
 // CORS middleware

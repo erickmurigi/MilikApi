@@ -14,7 +14,7 @@ import { verifyUser } from "../../controllers/verifyToken.js"
 const router = express.Router()
 
 // Create property
-router.post("/", verifyUser, createProperty)
+router.post("/",  createProperty)
 
 // Get all properties
 router.get("/", verifyUser, getProperties)
