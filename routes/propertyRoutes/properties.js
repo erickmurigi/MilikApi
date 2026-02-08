@@ -9,7 +9,7 @@ import {
   getPropertyUnits,
   getPropertyTenants 
 } from "../../controllers/propertyController/property.js"
-import { verifyUser } from "../../controllers/verifyToken.js"
+
 
 const router = express.Router()
 
@@ -17,21 +17,21 @@ const router = express.Router()
 router.post("/",  createProperty)
 
 // Get all properties
-router.get("/", verifyUser, getProperties)
+router.get("/",  getProperties)
 
 // Get single property
-router.get("/:id", verifyUser, getProperty)
+router.get("/:id",  getProperty)
 
 // Update property
-router.put("/:id", verifyUser, updateProperty)
+router.put("/:id", updateProperty)
 
 // Delete property
-router.delete("/:id", verifyUser, deleteProperty)
+router.delete("/:id",  deleteProperty)
 
 // Get property units
-router.get("/units/:id", verifyUser, getPropertyUnits)
+router.get("/units/:id",getPropertyUnits)
 
 // Get property tenants
-router.get("/tenants/:id", verifyUser, getPropertyTenants)
+router.get("/tenants/:id",  getPropertyTenants)
 
 export default router
