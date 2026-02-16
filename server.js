@@ -31,6 +31,7 @@ import leaseRoutes from "./routes/propertyRoutes/leases.js"
 import expensePropertyRoutes from "./routes/propertyRoutes/expensesProperties.js"
 import notificationRoutes from "./routes/propertyRoutes/notifications.js"
 import DashboardRoutes from "./controllers/propertyController/dashboard.js"
+import companyRoutes from "./routes/companies.js";
 // Import your Sale model
 
 import ngrok from '@ngrok/ngrok';
@@ -149,7 +150,7 @@ app.use("/api/leases", leaseRoutes)
 app.use("/api/propertyexpenses", expensePropertyRoutes)
 app.use("/api/notifications", notificationRoutes)
 app.use("/api/dashboard", DashboardRoutes)
-
+app.use('/api/companies', companyRoutes);
 
 
 

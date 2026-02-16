@@ -1,5 +1,5 @@
 import Employee from "../models/Employee.js";
-import Business from "../models/Business.js";
+import Business from "../models/Company.js";
 import bcrypt from "bcryptjs";
 import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
