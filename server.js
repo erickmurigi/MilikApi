@@ -11,10 +11,9 @@ import http from "http";
 import { Server } from "socket.io";
 
 // Routes
-import employeesAuthRoute from "./routes/employeesAuth.js";
 
-import employeesRoute from "./routes/employees.js";
-;
+
+import userRoutes from './routes/user.js';
 
 
 import printerRoute from "./routes/printers.js";
@@ -132,9 +131,8 @@ app.use(express.json());
 
 // Endpoints to access API
 
-app.use("/api/employeesAuth", employeesAuthRoute);
 
-app.use("/api/employees", employeesRoute);
+app.use('/api/users', userRoutes);
 
 app.use("/api/printers", printerRoute);
 
