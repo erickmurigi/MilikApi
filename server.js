@@ -52,13 +52,18 @@ const allowedOrigins = [
     
 ];
 
+const isAllowedLocalhostOrigin = (origin) => {
+        if (!origin) return false;
+        return /^http:\/\/localhost:\d+$/.test(origin);
+};
+
 // CORS middleware
 app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
-        if (allowedOrigins.indexOf(origin) === -1) {
+        if (allowedOrigins.indexOf(origin) === -1 && !isAllowedLocalhostOrigin(origin)) {
             const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
             return callback(new Error(msg), false);
         }
@@ -73,7 +78,13 @@ app.use(cors({
 
 // Explicitly handle OPTIONS preflight requests
 app.options('*', cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin) || isAllowedLocalhostOrigin(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error(`The CORS policy for this site does not allow access from the specified Origin: ${origin}`), false);
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
@@ -89,7 +100,7 @@ app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 app.use((req, res, next) => {
     // Set CORS headers for all responses
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
+    if (origin && (allowedOrigins.includes(origin) || isAllowedLocalhostOrigin(origin))) {
         res.header('Access-Control-Allow-Origin', origin);
     }
     res.header('Access-Control-Allow-Credentials', 'true');
@@ -102,15 +113,23 @@ app.use((req, res, next) => {
   // Initialize Socket.IO
  const io = new Server(server, {
     cors: {
-        origin: [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "https://betterbiz.netlify.app",
-            "https://biznafitty.com",
-            "https://sandbox.safaricom.co.ke",
-            "https://gloriouspalacehotel.co.ke",
-            "https://pup-enhanced-killdeer.ngrok-free.app"
-        ],
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            if (
+                allowedOrigins.includes(origin) ||
+                isAllowedLocalhostOrigin(origin) ||
+                [
+                    "https://betterbiz.netlify.app",
+                    "https://biznafitty.com",
+                    "https://sandbox.safaricom.co.ke",
+                    "https://gloriouspalacehotel.co.ke",
+                    "https://pup-enhanced-killdeer.ngrok-free.app"
+                ].includes(origin)
+            ) {
+                return callback(null, true);
+            }
+            return callback(new Error(`Socket.IO CORS blocked origin: ${origin}`));
+        },
         methods: ["GET", "POST", "DELETE", "UPDATE"],
         credentials: true,
     },

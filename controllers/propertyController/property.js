@@ -1,4 +1,5 @@
 // controllers/propertyController.js
+import mongoose from "mongoose";
 import Property from "../../models/Property.js";
 import Unit from "../../models/Unit.js";
 import Tenant from "../../models/Tenant.js";
@@ -56,6 +57,14 @@ export const createProperty = async (req, res) => {
       });
     }
 
+    const businessId = req.user?.business || req.body?.business;
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        message: "Business context is required to create a property"
+      });
+    }
+
     // Prepare banking details
     const bankingDetails = {
       drawerBank,
@@ -63,6 +72,10 @@ export const createProperty = async (req, res) => {
       accountName,
       accountNumber
     };
+
+    const createdById = mongoose.Types.ObjectId.isValid(req.user?._id)
+      ? req.user._id
+      : undefined;
 
     // Create property
     const property = new Property({
@@ -112,9 +125,9 @@ export const createProperty = async (req, res) => {
       description: description || notes,
       status: status || 'active',
       images: images || [],
-      business: req.user.business, // Assuming user has business field
-      createdBy: req.user._id,
-      updatedBy: req.user._id
+      business: businessId,
+      createdBy: createdById,
+      updatedBy: createdById
     });
 
     const savedProperty = await property.save();
@@ -137,7 +150,15 @@ export const createProperty = async (req, res) => {
 export const getProperties = async(req, res, next) => {
     try {
     const { page = 1, limit = 10, search, status } = req.query;
-    const query = { business: req.user.business };
+    const businessId = req.user?.business || req.query?.business;
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        message: "Business context is required to fetch properties"
+      });
+    }
+
+    const query = { business: businessId };
     
     if (search) {
       query.$or = [
