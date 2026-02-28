@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { createError } from "../utils/error.js";
 
+const JWT_SECRET = process.env.JWT || "milik-local-dev-jwt-secret";
 
 
 // Verifies JWT from Authorization: Bearer <token>
@@ -13,7 +14,7 @@ export const verifyToken = (req, res, next) => {
 
   const token = authHeader.split(" ")[1];
 
-  jwt.verify(token, process.env.JWT, (err, user) => {
+  jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return next(createError(403, "Token is not valid!"));
 
     req.user = user; // payload

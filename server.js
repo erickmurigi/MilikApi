@@ -13,6 +13,7 @@ import { Server } from "socket.io";
 // Routes
 
 
+import authRoutes from './routes/auth.js';
 import userRoutes from './routes/user.js';
 
 
@@ -131,7 +132,7 @@ app.use(express.json());
 
 // Endpoints to access API
 
-
+app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 
 app.use("/api/printers", printerRoute);

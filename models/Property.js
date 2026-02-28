@@ -261,7 +261,6 @@ PropertySchema.pre('save', function(next) {
 });
 
 // Indexes for better query performance
-PropertySchema.index({ propertyCode: 1 }, { unique: true });
 PropertySchema.index({ propertyName: 1 });
 PropertySchema.index({ lrNumber: 1 });
 PropertySchema.index({ status: 1 });
