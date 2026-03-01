@@ -75,7 +75,7 @@ export const getPayments = async(req, res, next) => {
         const payments = await RentPayment.find(filter)
             .populate('tenant', 'name email phone')
             .populate('unit', 'unitNumber')
-            .populate('confirmedBy', 'name')
+            .populate('confirmedBy', 'surname otherNames email')
             .sort({ paymentDate: -1 });
         res.status(200).json(payments);
     } catch (err) {
@@ -89,7 +89,7 @@ export const getPayment = async(req, res, next) => {
         const payment = await RentPayment.findById(req.params.id)
             .populate('tenant', 'name email phone unit')
             .populate('unit', 'unitNumber property')
-            .populate('confirmedBy', 'name');
+            .populate('confirmedBy', 'surname otherNames email');
         if (!payment) return res.status(404).json({ message: "Payment not found" });
         res.status(200).json(payment);
     } catch (err) {

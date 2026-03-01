@@ -32,7 +32,7 @@ const MaintenanceSchema = new mongoose.Schema(
     scheduledDate: { type: Date },
     completedDate: { type: Date },
     images: [{ type: String }],
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

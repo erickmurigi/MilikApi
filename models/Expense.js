@@ -14,7 +14,7 @@ const ExpenseSchema = new mongoose.Schema({
   bankAmount: { type: Number, default: 0 }, // For Bank
   debtCleared: { type: Boolean, default: false },
   transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
-  business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true }
+  business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true }
 }, { timestamps: true });
 
 export default mongoose.model("Expense", ExpenseSchema);

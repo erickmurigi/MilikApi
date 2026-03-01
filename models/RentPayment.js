@@ -53,7 +53,7 @@ const RentPaymentSchema = new mongoose.Schema(
       }],
       total: { type: Number }
     },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

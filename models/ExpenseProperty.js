@@ -26,7 +26,7 @@ const ExpensePropertySchema = new mongoose.Schema(
       type: String, 
       enum: ['bank_transfer', 'mobile_money', 'cash', 'check', 'credit_card'] 
     },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

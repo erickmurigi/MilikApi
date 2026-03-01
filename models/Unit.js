@@ -28,6 +28,11 @@ const UnitSchema = new mongoose.Schema(
       isIncluded: { type: Boolean, default: false },
       unitCharge: { type: Number, default: 0 }
     }],
+    billingFrequency: { 
+      type: String, 
+      enum: ['monthly', 'bi-monthly', 'quarterly', 'semi-annually', 'annually'],
+      default: 'monthly'
+    },
     isVacant: { type: Boolean, default: true },
     lastTenant: { 
       type: mongoose.Schema.Types.ObjectId, 
@@ -39,7 +44,7 @@ const UnitSchema = new mongoose.Schema(
     nextPaymentDate: { type: Date },
     images: [{ type: String }],
     description: { type: String },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

@@ -37,7 +37,7 @@ const TenantSchema = new mongoose.Schema(
       uploadedAt: { type: Date, default: Date.now }
     }],
     profileImage: { type: String, default: "" },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

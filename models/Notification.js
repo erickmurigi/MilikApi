@@ -23,7 +23,7 @@ const NotificationSchema = new mongoose.Schema(
       enum: ['low', 'medium', 'high'],
       default: 'medium' 
     },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

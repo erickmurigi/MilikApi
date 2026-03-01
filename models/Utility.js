@@ -11,7 +11,7 @@ const UtilitySchema = new mongoose.Schema(
       enum: ['monthly', 'quarterly', 'annually', 'per_use'],
       default: 'monthly' 
     },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' },
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
     isActive: { type: Boolean, default: true }
   },
   { timestamps: true }

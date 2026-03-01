@@ -82,7 +82,22 @@ export const createUnit = async(req, res, next) => {
         
         res.status(200).json(response);
     } catch (err) {
-        next(err);
+        console.error('Create unit error:', err);
+        
+        // Provide clear validation error messages
+        let errorMessage = err.message;
+        
+        if (err.name === 'ValidationError') {
+            const validationErrors = Object.values(err.errors).map(error => error.message);
+            errorMessage = validationErrors.join('; ');
+        } else if (err.code === 11000) {
+            errorMessage = 'A unit with this number already exists for this property';
+        }
+        
+        res.status(400).json({ 
+            success: false,
+            message: errorMessage 
+        });
     }
 }
 
@@ -95,7 +110,7 @@ export const getUnits = async(req, res, next) => {
         if (status) filter.status = status;
         
         const units = await Unit.find(filter)
-            .populate('property', 'name address')
+            .populate('property', 'propertyName address')
             .populate('utilities.utility', 'name unitCost billingCycle isActive')
             .sort({ property: 1, unitNumber: 1 });
         

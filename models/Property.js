@@ -193,7 +193,7 @@ const PropertySchema = new mongoose.Schema(
     // Business Reference
     business: { 
       type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Business',
+      ref: 'Company',
       required: true 
     },
     

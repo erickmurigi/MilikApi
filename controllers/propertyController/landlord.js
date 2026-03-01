@@ -107,7 +107,7 @@ export const getLandlords = async(req, res, next) => {
         }
 
         const landlords = await Landlord.find(query)
-            .populate('company', 'name')
+            .populate('company', 'companyName')
             .sort({ createdAt: -1 });
         
         res.status(200).json({
@@ -129,8 +129,8 @@ export const getLandlords = async(req, res, next) => {
 export const getLandlord = async(req, res, next) => {
     try {
         const landlord = await Landlord.findById(req.params.id)
-            .populate('company', 'name')
-            .populate('createdBy', 'name email');
+            .populate('company', 'companyName')
+            .populate('createdBy', 'surname otherNames email');
         
         if (!landlord) {
             return res.status(404).json({ 
@@ -166,7 +166,7 @@ export const updateLandlord = async(req, res, next) => {
             req.params.id,
             { $set: updateData },
             { new: true, runValidators: true }
-        ).populate('company', 'name');
+        ).populate('company', 'companyName');
         
         if (!updatedLandlord) {
             return res.status(404).json({

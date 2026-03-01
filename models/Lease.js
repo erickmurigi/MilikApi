@@ -29,7 +29,7 @@ const LeaseSchema = new mongoose.Schema(
     signedByTenant: { type: Boolean, default: false },
     signedByLandlord: { type: Boolean, default: false },
     signedDate: { type: Date },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+    business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }
 );

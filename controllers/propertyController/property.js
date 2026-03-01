@@ -57,7 +57,8 @@ export const createProperty = async (req, res) => {
       });
     }
 
-    const businessId = req.user?.business || req.body?.business;
+    // Get business ID from JWT token (stored as 'company') or request body
+    const businessId = req.user?.company || req.user?.business || req.body?.business;
     if (!businessId) {
       return res.status(400).json({
         success: false,
@@ -73,25 +74,32 @@ export const createProperty = async (req, res) => {
       accountNumber
     };
 
-    const createdById = mongoose.Types.ObjectId.isValid(req.user?._id)
-      ? req.user._id
+    // Get user ID from JWT (stored as 'id' or '_id') or request body
+    const userId = req.user?.id || req.user?._id || req.body?.createdBy;
+    const createdById = mongoose.Types.ObjectId.isValid(userId)
+      ? userId
       : undefined;
+
+    // Clean optional enum fields to avoid validation errors
+    const cleanedData = {};
+    if (specification && specification.trim() !== '') cleanedData.specification = specification;
+    if (multiStoreyType && multiStoreyType.trim() !== '') cleanedData.multiStoreyType = multiStoreyType;
+    if (category && category.trim() !== '') cleanedData.category = category;
 
     // Create property
     const property = new Property({
       dateAcquired: dateAcquired ? new Date(dateAcquired) : null,
       letManage,
-      landlords: landlords.map((landlord, index) => ({
-        ...landlord,
+      landlords: (landlords || []).map((landlord, index) => ({
+        name: landlord.name || '',
+        contact: landlord.contact || '',
         isPrimary: index === 0
       })),
       propertyCode,
       propertyName,
       lrNumber,
-      category,
+      ...cleanedData, // Only include non-empty optional enum fields
       propertyType,
-      specification,
-      multiStoreyType,
       numberOfFloors: numberOfFloors ? parseInt(numberOfFloors) : 0,
       country,
       townCityState,
@@ -107,12 +115,12 @@ export const createProperty = async (req, res) => {
       mpesaPaybill,
       disableMpesaStkPush,
       mpesaNarration,
-      standingCharges: standingCharges.map(charge => ({
+      standingCharges: (standingCharges || []).map(charge => ({
         ...charge,
         chargeValue: parseFloat(charge.chargeValue) || 0,
         costPerArea: charge.costPerArea || ''
       })),
-      securityDeposits: securityDeposits.map(deposit => ({
+      securityDeposits: (securityDeposits || []).map(deposit => ({
         ...deposit,
         amount: parseFloat(deposit.amount) || 0
       })),
@@ -139,9 +147,20 @@ export const createProperty = async (req, res) => {
     });
   } catch (error) {
     console.error('Create property error:', error);
+    
+    // Provide clear validation error messages
+    let errorMessage = error.message;
+    
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      errorMessage = validationErrors.join('; ');
+    } else if (error.code === 11000) {
+      errorMessage = 'A property with this code already exists';
+    }
+    
     res.status(400).json({ 
       success: false,
-      message: error.message 
+      message: errorMessage
     });
   }
 };
@@ -150,7 +169,8 @@ export const createProperty = async (req, res) => {
 export const getProperties = async(req, res, next) => {
     try {
     const { page = 1, limit = 10, search, status } = req.query;
-    const businessId = req.user?.business || req.query?.business;
+    // Get business ID from JWT token (stored as 'company') or query params
+    const businessId = req.user?.company || req.user?.business || req.query?.business;
     if (!businessId) {
       return res.status(400).json({
         success: false,
@@ -173,9 +193,9 @@ export const getProperties = async(req, res, next) => {
     }
     
     const properties = await Property.find(query)
-      .populate('business', 'name')
-      .populate('createdBy', 'name email')
-      .populate('updatedBy', 'name email')
+      .populate('business', 'companyName')
+      .populate('createdBy', 'surname otherNames email')
+      .populate('updatedBy', 'surname otherNames email')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
@@ -203,9 +223,9 @@ export const getProperties = async(req, res, next) => {
 export const getProperty = async(req, res, next) => {
     try {
     const property = await Property.findById(req.params.id)
-      .populate('business', 'name')
-      .populate('createdBy', 'name email')
-      .populate('updatedBy', 'name email');
+      .populate('business', 'companyName')
+      .populate('createdBy', 'surname otherNames email')
+      .populate('updatedBy', 'surname otherNames email');
     
     if (!property) {
       return res.status(404).json({ 
@@ -215,7 +235,8 @@ export const getProperty = async(req, res, next) => {
     }
     
     // Check if property belongs to user's business
-    if (property.business.toString() !== req.user.business.toString()) {
+    const userBusinessId = req.user?.company || req.user?.business;
+    if (property.business.toString() !== userBusinessId?.toString()) {
       return res.status(403).json({ 
         success: false,
         message: 'Not authorized to access this property' 
@@ -247,7 +268,8 @@ export const updateProperty = async(req, res, next) => {
     }
     
     // Check if property belongs to user's business
-    if (property.business.toString() !== req.user.business.toString()) {
+    const userBusinessId = req.user?.company || req.user?.business;
+    if (property.business.toString() !== userBusinessId?.toString()) {
       return res.status(403).json({ 
         success: false,
         message: 'Not authorized to update this property' 
@@ -277,15 +299,28 @@ export const updateProperty = async(req, res, next) => {
       };
     }
     
+    // Clean optional enum fields to avoid validation errors
+    const optionalEnumFields = ['specification', 'multiStoreyType', 'category'];
+    optionalEnumFields.forEach(field => {
+      if (req.body[field] === '' || req.body[field] === null) {
+        req.body[field] = undefined;
+      }
+    });
+    
     // Update property
     Object.keys(req.body).forEach(key => {
       if (key !== 'drawerBank' && key !== 'bankBranch' && 
-          key !== 'accountName' && key !== 'accountNumber') {
+          key !== 'accountName' && key !== 'accountNumber' && 
+          req.body[key] !== undefined) {
         property[key] = req.body[key];
       }
     });
     
-    property.updatedBy = req.user._id;
+    // Get user ID from JWT (stored as 'id' or '_id')
+    const userId = req.user?.id || req.user?._id;
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      property.updatedBy = userId;
+    }
     property.updatedAt = Date.now();
     
     const updatedProperty = await property.save();
@@ -296,9 +331,21 @@ export const updateProperty = async(req, res, next) => {
       message: 'Property updated successfully'
     });
   } catch (error) {
+    console.error('Update property error:', error);
+    
+    // Provide clear validation error messages
+    let errorMessage = error.message;
+    
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      errorMessage = validationErrors.join('; ');
+    } else if (error.code === 11000) {
+      errorMessage = 'A property with this code already exists';
+    }
+    
     res.status(400).json({ 
       success: false,
-      message: error.message 
+      message: errorMessage 
     });
   }
 }
@@ -316,7 +363,8 @@ export const deleteProperty = async(req, res, next) => {
     }
     
     // Check if property belongs to user's business
-    if (property.business.toString() !== req.user.business.toString()) {
+    const userBusinessId = req.user?.company || req.user?.business;
+    if (property.business.toString() !== userBusinessId?.toString()) {
       return res.status(403).json({ 
         success: false,
         message: 'Not authorized to delete this property' 
@@ -352,7 +400,7 @@ export const deleteProperty = async(req, res, next) => {
 export const getPropertyUnits = async(req, res, next) => {
     try {
         const units = await Unit.find({ property: req.params.id })
-            .populate('property', 'name address')
+            .populate('property', 'propertyName address')
             .sort({ unitNumber: 1 });
         res.status(200).json(units);
     } catch (err) {
