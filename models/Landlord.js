@@ -20,6 +20,12 @@ const LandlordSchema = new mongoose.Schema(
       type: String, 
       required: true 
     },
+    // Legacy compatibility: existing DB has unique index `idNumber_1`
+    // Keep this field synced with regId to avoid duplicate-null insert failures.
+    idNumber: {
+      type: String,
+      trim: true
+    },
     regId: { 
       type: String, 
       required: true 

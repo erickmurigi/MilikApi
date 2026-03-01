@@ -1,4 +1,5 @@
 // controllers/landlordController.js
+import mongoose from "mongoose";
 import Landlord from "../../models/Landlord.js";
 import Property from "../../models/Property.js";
 import Unit from "../../models/Unit.js";
@@ -27,11 +28,28 @@ export const createLandlord = async(req, res, next) => {
             landlordCode = await generateLandlordCode();
         }
 
+        const rawCompany = req.body.company || req.user?.company?._id || req.user?.company || req.user?.business;
+        let companyId;
+        if (rawCompany) {
+            if (!mongoose.Types.ObjectId.isValid(rawCompany)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid company context. Please select a valid company."
+                });
+            }
+            companyId = rawCompany;
+        }
+
+        const createdById = mongoose.Types.ObjectId.isValid(req.user?._id)
+            ? req.user._id
+            : undefined;
+
         const newLandlord = new Landlord({
             ...req.body,
             landlordCode,
-            company: req.body.company || req.company?._id,
-            createdBy: req.user?._id
+            idNumber: req.body.regId?.trim(),
+            company: companyId,
+            createdBy: createdById
         });
 
         const savedLandlord = await newLandlord.save();
@@ -42,6 +60,26 @@ export const createLandlord = async(req, res, next) => {
         });
     } catch (err) {
         console.error('Create landlord error:', err);
+        if (err?.code === 11000) {
+            const duplicateField = Object.keys(err.keyPattern || {})[0] || "field";
+            if (duplicateField === "landlordCode") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Landlord code already exists. Please use a different code."
+                });
+            }
+            if (duplicateField === "idNumber" || duplicateField === "regId") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Reg/ID number already exists. Please use a different Reg/ID number."
+                });
+            }
+
+            return res.status(400).json({
+                success: false,
+                message: `Duplicate value for ${duplicateField}. Please use a different value.`
+            });
+        }
         res.status(500).json({
             success: false,
             message: err.message || "Error creating landlord",
@@ -120,6 +158,9 @@ export const updateLandlord = async(req, res, next) => {
     try {
         // Don't allow updating landlordCode
         const { landlordCode, ...updateData } = req.body;
+        if (updateData.regId) {
+            updateData.idNumber = String(updateData.regId).trim();
+        }
         
         const updatedLandlord = await Landlord.findByIdAndUpdate(
             req.params.id,
@@ -141,6 +182,12 @@ export const updateLandlord = async(req, res, next) => {
         });
     } catch (err) {
         console.error('Update landlord error:', err);
+        if (err?.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                message: "Reg/ID number already exists. Please use a different Reg/ID number."
+            });
+        }
         res.status(500).json({
             success: false,
             message: err.message || "Error updating landlord",
