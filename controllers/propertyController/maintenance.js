@@ -1,5 +1,6 @@
 // controllers/maintenanceController.js
 import Maintenance from "../../models/Maintenance.js";
+import { emitToCompany } from "../../utils/socketManager.js";
 
 // Create maintenance request
 export const createMaintenance = async(req, res, next) => {
@@ -8,6 +9,7 @@ export const createMaintenance = async(req, res, next) => {
 
     try {
         const savedMaintenance = await newMaintenance.save();
+        emitToCompany(req.user.company, 'maintenance:new', savedMaintenance);
         res.status(200).json(savedMaintenance);
     } catch (err) {
         next(err);

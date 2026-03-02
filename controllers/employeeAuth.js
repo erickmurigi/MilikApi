@@ -4,11 +4,14 @@ import bcrypt from "bcryptjs";
 import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
-}
+// Get JWT secret with lazy validation
+const getJWTSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
+};
 
 export const Register = async (req, res, next) => {
     try {\n        // Security: Use authenticated user's company, not client-provided business
@@ -73,7 +76,7 @@ export const Login = async (req, res, next) => {
         // Include effectiveIsAdmin in the token
         const token = jwt.sign(
             { id: employee._id, isAdmin: effectiveIsAdmin },
-            JWT_SECRET,
+            getJWTSecret(),
             { expiresIn: '1d' }
         );
 

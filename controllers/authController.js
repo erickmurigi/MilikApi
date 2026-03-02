@@ -3,19 +3,23 @@ import Company from "../models/Company.js";
 import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const MILIK_ADMIN_EMAIL = process.env.MILIK_ADMIN_EMAIL?.toLowerCase();
-const MILIK_ADMIN_PASSWORD = process.env.MILIK_ADMIN_PASSWORD;
-const MILIK_ADMIN_NAME = process.env.MILIK_ADMIN_NAME || "Milik Admin";
+// Get JWT secret with lazy validation
+const getJWTSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
+};
 
-// Validate required environment variables
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
-}
-
-if (!MILIK_ADMIN_EMAIL || !MILIK_ADMIN_PASSWORD) {
-  console.warn("WARNING: System admin credentials not configured. Set MILIK_ADMIN_EMAIL and MILIK_ADMIN_PASSWORD in .env");
-}
+// Get admin credentials with lazy loading
+const getAdminCredentials = () => {
+  return {
+    email: process.env.MILIK_ADMIN_EMAIL?.toLowerCase(),
+    password: process.env.MILIK_ADMIN_PASSWORD,
+    name: process.env.MILIK_ADMIN_NAME || "Milik Admin"
+  };
+};
 
 // ========== LOGIN ==========
 export const loginUser = async (req, res, next) => {
@@ -29,19 +33,20 @@ export const loginUser = async (req, res, next) => {
     const normalizedEmail = String(email).toLowerCase().trim();
 
     // System admin login (only if credentials are configured)
-    if (MILIK_ADMIN_EMAIL && MILIK_ADMIN_PASSWORD && 
-        normalizedEmail === MILIK_ADMIN_EMAIL && password === MILIK_ADMIN_PASSWORD) {
+    const adminCreds = getAdminCredentials();
+    if (adminCreds.email && adminCreds.password && 
+        normalizedEmail === adminCreds.email && password === adminCreds.password) {
       const token = jwt.sign(
         {
           id: "milik-admin",
-          email: MILIK_ADMIN_EMAIL,
+          email: adminCreds.email,
           profile: "Administrator",
           superAdminAccess: true,
           adminAccess: true,
           isSystemAdmin: true,
           company: null,
         },
-        JWT_SECRET,
+        getJWTSecret(),
         { expiresIn: "7d" }
       );
 
@@ -50,8 +55,8 @@ export const loginUser = async (req, res, next) => {
         token,
         user: {
           _id: "milik-admin",
-          email: MILIK_ADMIN_EMAIL,
-          surname: MILIK_ADMIN_NAME,
+          email: adminCreds.email,
+          surname: adminCreds.name,
           otherNames: "",
           profile: "Administrator",
           superAdminAccess: true,
@@ -102,7 +107,7 @@ export const loginUser = async (req, res, next) => {
         superAdminAccess: user.superAdminAccess,
         adminAccess: user.adminAccess,
       },
-      JWT_SECRET,
+      getJWTSecret(),
       { expiresIn: '7d' }
     );
 

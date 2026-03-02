@@ -1,6 +1,7 @@
 // controllers/leaseController.js
 import Lease from "../../models/Lease.js";
 import Tenant from "../../models/Tenant.js";
+import { emitToCompany } from "../../utils/socketManager.js";
 
 // Create lease
 export const createLease = async(req, res, next) => {
@@ -9,6 +10,7 @@ export const createLease = async(req, res, next) => {
 
     try {
         const savedLease = await newLease.save();
+        emitToCompany(req.user.company, 'lease:new', savedLease);
         res.status(200).json(savedLease);
     } catch (err) {
         next(err);

@@ -1,5 +1,6 @@
 // controllers/notificationController.js
 import Notification from "../../models/Notification.js";
+import { emitToCompany } from "../../utils/socketManager.js";
 
 // Create notification
 export const createNotification = async(req, res, next) => {
@@ -8,6 +9,10 @@ export const createNotification = async(req, res, next) => {
 
     try {
         const savedNotification = await newNotification.save();
+        
+        // Emit real-time socket event to company
+        emitToCompany(req.user.company, 'notification:new', savedNotification);
+        
         res.status(200).json(savedNotification);
     } catch (err) {
         next(err);

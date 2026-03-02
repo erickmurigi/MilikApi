@@ -1,11 +1,14 @@
 import jwt from "jsonwebtoken";
 import { createError } from "../utils/error.js";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
-}
+// Get JWT_SECRET with lazy validation
+const getJWTSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
+};
 
 // Verifies JWT from Authorization: Bearer <token>
 export const verifyToken = (req, res, next) => {
@@ -17,7 +20,7 @@ export const verifyToken = (req, res, next) => {
 
   const token = authHeader.split(" ")[1];
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, getJWTSecret(), (err, user) => {
     if (err) return next(createError(403, "Token is not valid!"));
 
     req.user = user; // payload

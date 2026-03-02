@@ -2,6 +2,7 @@
 import RentPayment from "../../models/RentPayment.js";
 import Tenant from "../../models/Tenant.js";
 import Unit from "../../models/Unit.js";
+import { emitToCompany } from "../../utils/socketManager.js";
 
 
 // Generate unique receipt number
@@ -57,6 +58,9 @@ export const createPayment = async (req, res, next) => {
         if (savedPayment.isConfirmed) {
             await updateTenantBalance(savedPayment);
         }
+        
+        // Emit real-time socket event to company
+        emitToCompany(businessId, 'payment:new', savedPayment);
         
         res.status(200).json(savedPayment);
     } catch (err) {

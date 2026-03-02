@@ -1,11 +1,14 @@
 import jwt from "jsonwebtoken";
 import { createError } from "../utils/error.js";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
-}
+// Get JWT secret with lazy validation
+const getJWTSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
+};
 
 export const verifyToken = (req, res, next) => {
   const token = req.cookies.access_token;
@@ -13,7 +16,7 @@ export const verifyToken = (req, res, next) => {
     return next(createError(401, "You are not authenticated!"));
   }
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, getJWTSecret(), (err, user) => {
     if (err) return next(createError(403, "Token is not valid!"));
     req.user = user;
     next();

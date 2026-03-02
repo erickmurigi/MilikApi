@@ -9,6 +9,7 @@ import bodyParser from "body-parser";
 dotenv.config();
 import http from "http";
 import { Server } from "socket.io";
+import { setIO } from "./utils/socketManager.js";
 
 // Routes
 
@@ -138,10 +139,25 @@ app.use((req, res, next) => {
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
+    socket.on("joinCompany", (data) => {
+        const { companyId, userId } = data;
+        if (companyId) {
+            socket.join(`company-${companyId}`);
+            console.log(`User ${userId} joined company room: company-${companyId}`);
+        }
+        if (userId) {
+            socket.join(`user-${userId}`);
+            console.log(`User joined user room: user-${userId}`);
+        }
+    });
+
     socket.on("disconnect", () => {
         console.log("User disconnected:", socket.id);
     });
 });
+
+// Register global IO instance for controllers
+setIO(io);
 
 // Middleware
 app.use(helmet());
@@ -238,11 +254,12 @@ console.log("Auto-deploy test successful! - " + new Date());
   try {
     await connect(); // MongoDB connection
     
-    // Start the server
-    server.listen(8800, () => {
-      console.log("Server running on port 8800");
-      
-     
+    // Start the server on configured port
+    const PORT = process.env.PORT || 8800;
+    server.listen(PORT, () => {
+      console.log(`✅ MILIK API Server running on port ${PORT}`);
+      console.log(`📡 Health check: http://localhost:${PORT}/health`);
+      console.log(`📚 API info: http://localhost:${PORT}/api`);
     });
 
   } catch (error) {
