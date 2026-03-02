@@ -3,7 +3,8 @@ import ExpenseProperty from "../../models/ExpenseProperty.js";
 
 // Create expense
 export const createExpense = async(req, res, next) => {
-    const newExpense = new ExpenseProperty({...req.body, business: req.body.business});
+    // Security: Use authenticated user's company, not client-provided business
+    const newExpense = new ExpenseProperty({...req.body, business: req.user.company});
 
     try {
         const savedExpense = await newExpense.save();
@@ -15,8 +16,10 @@ export const createExpense = async(req, res, next) => {
 
 // Get all expenses
 export const getExpenses = async(req, res, next) => {
-    const { business, category, property, unit, startDate, endDate } = req.query;
+    const { category, property, unit, startDate, endDate } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (category) filter.category = category;
         if (property) filter.property = property;

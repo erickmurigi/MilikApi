@@ -16,8 +16,8 @@ export const createTenant = async (req, res, next) => {
             return res.status(400).json({ message: "Unit is not available" });
         }
 
-        // Create new tenant
-        const newTenant = new Tenant({ ...req.body, business: req.body.business });
+        // Security: Use authenticated user's company, not client-provided business
+        const newTenant = new Tenant({ ...req.body, business: req.user.company });
         const savedTenant = await newTenant.save();
 
         // Get the property associated with this unit
@@ -51,8 +51,10 @@ export const createTenant = async (req, res, next) => {
 
 // Get all tenants
 export const getTenants = async (req, res, next) => {
-    const { business, status, unit } = req.query;
+    const { status, unit } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (status) filter.status = status;
         if (unit) filter.unit = unit;

@@ -3,7 +3,8 @@ import Utility from "../../models/Utility.js";
 
 // Create utility
 export const createUtility = async(req, res, next) => {
-    const newUtility = new Utility({...req.body, business: req.body.business});
+    // Security: Use authenticated user's company, not client-provided business
+    const newUtility = new Utility({...req.body, business: req.user.company});
 
     try {
         const savedUtility = await newUtility.save();
@@ -15,8 +16,9 @@ export const createUtility = async(req, res, next) => {
 
 // Get all utilities
 export const getUtilities = async(req, res, next) => {
-    const { business } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const utilities = await Utility.find({ business }).sort({ name: 1 });
         res.status(200).json(utilities);
     } catch (err) {

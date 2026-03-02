@@ -3,7 +3,8 @@ import Notification from "../../models/Notification.js";
 
 // Create notification
 export const createNotification = async(req, res, next) => {
-    const newNotification = new Notification({...req.body, business: req.body.business});
+    // Security: Use authenticated user's company, not client-provided business
+    const newNotification = new Notification({...req.body, business: req.user.company});
 
     try {
         const savedNotification = await newNotification.save();
@@ -15,8 +16,10 @@ export const createNotification = async(req, res, next) => {
 
 // Get all notifications
 export const getNotifications = async(req, res, next) => {
-    const { business, recipient, isRead, type } = req.query;
+    const { recipient, isRead, type } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (recipient) filter.recipient = recipient;
         if (isRead !== undefined) filter.isRead = isRead === 'true';

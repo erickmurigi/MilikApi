@@ -57,12 +57,12 @@ export const createProperty = async (req, res) => {
       });
     }
 
-    // Get business ID from JWT token (stored as 'company') or request body
-    const businessId = req.user?.company || req.user?.business || req.body?.business;
+    // Security: Use authenticated user's company, not client-provided business
+    const businessId = req.user?.company;
     if (!businessId) {
       return res.status(400).json({
         success: false,
-        message: "Business context is required to create a property"
+        message: "Business context is required to create a property. Please ensure you are logged in with a company account."
       });
     }
 
@@ -169,8 +169,12 @@ export const createProperty = async (req, res) => {
 export const getProperties = async(req, res, next) => {
     try {
     const { page = 1, limit = 10, search, status } = req.query;
-    // Get business ID from JWT token (stored as 'company') or query params
-    const businessId = req.user?.company || req.user?.business || req.query?.business;
+    
+    // Security: Use authenticated user's company (system admins can query across companies)
+    const businessId = req.user.isSystemAdmin && req.query.business 
+      ? req.query.business 
+      : req.user?.company;
+      
     if (!businessId) {
       return res.status(400).json({
         success: false,
@@ -234,13 +238,15 @@ export const getProperty = async(req, res, next) => {
       });
     }
     
-    // Check if property belongs to user's business
-    const userBusinessId = req.user?.company || req.user?.business;
-    if (property.business.toString() !== userBusinessId?.toString()) {
-      return res.status(403).json({ 
-        success: false,
-        message: 'Not authorized to access this property' 
-      });
+    // Security: Check if property belongs to user's business (system admins can access all)
+    if (!req.user.isSystemAdmin) {
+      const userBusinessId = req.user?.company;
+      if (property.business.toString() !== userBusinessId?.toString()) {
+        return res.status(403).json({ 
+          success: false,
+          message: 'Not authorized to access this property' 
+        });
+      }
     }
     
     res.json({

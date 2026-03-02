@@ -3,7 +3,8 @@ import Maintenance from "../../models/Maintenance.js";
 
 // Create maintenance request
 export const createMaintenance = async(req, res, next) => {
-    const newMaintenance = new Maintenance({...req.body, business: req.body.business});
+    // Security: Use authenticated user's company, not client-provided business
+    const newMaintenance = new Maintenance({...req.body, business: req.user.company});
 
     try {
         const savedMaintenance = await newMaintenance.save();
@@ -15,8 +16,10 @@ export const createMaintenance = async(req, res, next) => {
 
 // Get all maintenance requests
 export const getMaintenances = async(req, res, next) => {
-    const { business, status, priority, unit, tenant } = req.query;
+    const { status, priority, unit, tenant } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (status) filter.status = status;
         if (priority) filter.priority = priority;

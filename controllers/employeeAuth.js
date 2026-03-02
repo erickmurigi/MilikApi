@@ -4,9 +4,19 @@ import bcrypt from "bcryptjs";
 import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
 
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
+
 export const Register = async (req, res, next) => {
-    try {
-        const businessId = req.body.business;
+    try {\n        // Security: Use authenticated user's company, not client-provided business
+        const businessId = req.user?.company;
+        
+        if (!businessId) {
+            return res.status(400).json({ message: "Business context is required" });
+        }
 
         const salt = bcrypt.genSaltSync(10);
         const hash = bcrypt.hashSync(req.body.password, salt);
@@ -60,15 +70,10 @@ export const Login = async (req, res, next) => {
         const isPasswordCorrect = await bcrypt.compare(password, employee.password);
         if (!isPasswordCorrect) return next(createError(404, "Incorrect password"));
 
-        if (!process.env.JWT) {
-            console.error("JWT secret is not defined in environment variables");
-            return next(createError(500, "Server configuration error"));
-        }
-
         // Include effectiveIsAdmin in the token
         const token = jwt.sign(
             { id: employee._id, isAdmin: effectiveIsAdmin },
-            process.env.JWT,
+            JWT_SECRET,
             { expiresIn: '1d' }
         );
 

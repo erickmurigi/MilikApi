@@ -62,9 +62,10 @@ export const calculateTotalMonthlyAmount = async (unitId) => {
 // Create unit
 export const createUnit = async(req, res, next) => {
     try {
+        // Security: Use authenticated user's company, not client-provided business
         const newUnit = new Unit({
             ...req.body, 
-            business: req.body.business
+            business: req.user.company
         });
         
         const savedUnit = await newUnit.save();

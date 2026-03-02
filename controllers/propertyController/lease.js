@@ -4,7 +4,8 @@ import Tenant from "../../models/Tenant.js";
 
 // Create lease
 export const createLease = async(req, res, next) => {
-    const newLease = new Lease({...req.body, business: req.body.business});
+    // Security: Use authenticated user's company, not client-provided business
+    const newLease = new Lease({...req.body, business: req.user.company});
 
     try {
         const savedLease = await newLease.save();
@@ -16,8 +17,10 @@ export const createLease = async(req, res, next) => {
 
 // Get all leases
 export const getLeases = async(req, res, next) => {
-    const { business, status, tenant, unit } = req.query;
+    const { status, tenant, unit } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (status) filter.status = status;
         if (tenant) filter.tenant = tenant;

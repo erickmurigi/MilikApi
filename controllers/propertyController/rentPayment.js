@@ -32,20 +32,23 @@ const generateReceiptNumber = async (businessId) => {
 // Create payment
 export const createPayment = async (req, res, next) => {
     try {
+        // Security: Use authenticated user's company, not client-provided business
+        const businessId = req.user.company;
+        
         // Generate reference number
         const refNumber = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         
         // Generate receipt number if not provided
         let receiptNumber = req.body.receiptNumber;
         if (!receiptNumber || receiptNumber.trim() === '') {
-            receiptNumber = await generateReceiptNumber(req.body.business);
+            receiptNumber = await generateReceiptNumber(businessId);
         }
         
         const newPayment = new RentPayment({
             ...req.body,
             referenceNumber: refNumber,
             receiptNumber: receiptNumber,
-            business: req.body.business
+            business: businessId
         });
         
         const savedPayment = await newPayment.save();
@@ -63,8 +66,10 @@ export const createPayment = async (req, res, next) => {
 
 // Get all payments
 export const getPayments = async(req, res, next) => {
-    const { business, tenant, unit, month, year, paymentType } = req.query;
+    const { tenant, unit, month, year, paymentType } = req.query;
     try {
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
         const filter = { business };
         if (tenant) filter.tenant = tenant;
         if (unit) filter.unit = unit;

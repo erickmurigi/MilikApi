@@ -28,16 +28,14 @@ export const createLandlord = async(req, res, next) => {
             landlordCode = await generateLandlordCode();
         }
 
-        const rawCompany = req.body.company || req.user?.company?._id || req.user?.company || req.user?.business;
-        let companyId;
-        if (rawCompany) {
-            if (!mongoose.Types.ObjectId.isValid(rawCompany)) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid company context. Please select a valid company."
-                });
-            }
-            companyId = rawCompany;
+        // Security: Use authenticated user's company, not client-provided company
+        const companyId = req.user?.company;
+        
+        if (!companyId) {
+            return res.status(400).json({
+                success: false,
+                message: "Company context is required. Please ensure you are logged in with a company account."
+            });
         }
 
         const createdById = mongoose.Types.ObjectId.isValid(req.user?._id)
@@ -91,7 +89,12 @@ export const createLandlord = async(req, res, next) => {
 // Get all landlords
 export const getLandlords = async(req, res, next) => {
     try {
-        const { company, search, status } = req.query;
+        const { search, status } = req.query;
+        
+        // Security: Use authenticated user's company (system admins can query across companies)
+        const company = req.user.isSystemAdmin && req.query.company
+            ? req.query.company
+            : req.user?.company;
         
         let query = {};
         if (company) query.company = company;

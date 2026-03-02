@@ -149,6 +149,44 @@ app.use(morgan("common"));
 
 app.use(express.json());
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'MILIK API is running',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0'
+  });
+});
+
+// API information endpoint
+app.get('/api', (req, res) => {
+  res.status(200).json({
+    success: true,
+    name: 'MILIK Property Management API',
+    version: '1.0.0',
+    description: 'RESTful API for property, tenant, and landlord management',
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      companies: '/api/companies',
+      properties: '/api/properties',
+      units: '/api/units',
+      tenants: '/api/tenants',
+      landlords: '/api/landlords',
+      leases: '/api/leases',
+      rentPayments: '/api/rent-payments',
+      maintenance: '/api/maintenances',
+      expenses: '/api/propertyexpenses',
+      utilities: '/api/utilities',
+      notifications: '/api/notifications',
+      dashboard: '/api/dashboard'
+    },
+    documentation: 'https://github.com/erickmurigi/MilikApi/blob/main/README.md'
+  });
+});
+
 // Endpoints to access API
 
 app.use('/api/auth', authRoutes);

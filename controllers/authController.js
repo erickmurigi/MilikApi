@@ -3,10 +3,19 @@ import Company from "../models/Company.js";
 import { createError } from "../utils/error.js";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT || "milik-local-dev-jwt-secret";
-const MILIK_ADMIN_EMAIL = (process.env.MILIK_ADMIN_EMAIL || "admin@milik.com").toLowerCase();
-const MILIK_ADMIN_PASSWORD = process.env.MILIK_ADMIN_PASSWORD || "Admin@2024";
+const JWT_SECRET = process.env.JWT_SECRET;
+const MILIK_ADMIN_EMAIL = process.env.MILIK_ADMIN_EMAIL?.toLowerCase();
+const MILIK_ADMIN_PASSWORD = process.env.MILIK_ADMIN_PASSWORD;
 const MILIK_ADMIN_NAME = process.env.MILIK_ADMIN_NAME || "Milik Admin";
+
+// Validate required environment variables
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
+
+if (!MILIK_ADMIN_EMAIL || !MILIK_ADMIN_PASSWORD) {
+  console.warn("WARNING: System admin credentials not configured. Set MILIK_ADMIN_EMAIL and MILIK_ADMIN_PASSWORD in .env");
+}
 
 // ========== LOGIN ==========
 export const loginUser = async (req, res, next) => {
@@ -19,7 +28,9 @@ export const loginUser = async (req, res, next) => {
 
     const normalizedEmail = String(email).toLowerCase().trim();
 
-    if (normalizedEmail === MILIK_ADMIN_EMAIL && password === MILIK_ADMIN_PASSWORD) {
+    // System admin login (only if credentials are configured)
+    if (MILIK_ADMIN_EMAIL && MILIK_ADMIN_PASSWORD && 
+        normalizedEmail === MILIK_ADMIN_EMAIL && password === MILIK_ADMIN_PASSWORD) {
       const token = jwt.sign(
         {
           id: "milik-admin",
@@ -46,7 +57,7 @@ export const loginUser = async (req, res, next) => {
           superAdminAccess: true,
           adminAccess: true,
           isSystemAdmin: true,
-          company: { companyName: "Milik Admin" },
+          company: { companyName: "Milik System" },
           isActive: true,
         },
         message: "Login successful"
