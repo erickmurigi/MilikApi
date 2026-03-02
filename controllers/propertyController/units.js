@@ -112,15 +112,28 @@ export const getUnits = async(req, res, next) => {
         
         const units = await Unit.find(filter)
             .populate('property', 'propertyName address')
+            .populate('lastTenant', 'name phone status')
             .populate('utilities.utility', 'name unitCost billingCycle isActive')
             .sort({ property: 1, unitNumber: 1 });
+
+        const unitIds = units.map((u) => u._id);
+        const activeTenants = await Tenant.find({
+            unit: { $in: unitIds },
+            status: 'active'
+        }).select('name phone status unit');
+
+        const activeTenantByUnit = new Map(
+            activeTenants.map((tenant) => [tenant.unit.toString(), tenant])
+        );
         
         // Calculate total amount for each unit
         const unitsWithTotal = await Promise.all(
             units.map(async (unit) => {
                 const totalAmount = await calculateTotalMonthlyAmount(unit._id);
+                const currentTenant = activeTenantByUnit.get(unit._id.toString()) || null;
                 return {
                     ...unit._doc,
+                    currentTenant,
                     totalMonthlyAmount: totalAmount
                 };
             })

@@ -28,8 +28,8 @@ export const createLandlord = async(req, res, next) => {
             landlordCode = await generateLandlordCode();
         }
 
-        // Security: Use authenticated user's company, not client-provided company
-        const companyId = req.user?.company;
+        // Prefer authenticated user's company; fallback to explicit company from request
+        const companyId = req.user?.company || req.body?.company;
         
         if (!companyId) {
             return res.status(400).json({
