@@ -1,5 +1,7 @@
 // routes/property.js
 import express from "express"
+import { validateRequest } from "../../utils/validateRequest.js"
+import { createPropertySchema, updatePropertySchema } from "../../utils/validationSchemas.js"
 import {
   createProperty,
   getProperty,
@@ -14,7 +16,7 @@ import { verifyUser } from "../../controllers/verifyToken.js"
 const router = express.Router()
 
 // Create property
-router.post("/", verifyUser, createProperty)
+router.post("/", verifyUser, validateRequest(createPropertySchema), createProperty)
 
 // Get all properties
 router.get("/", verifyUser, getProperties)
@@ -23,7 +25,7 @@ router.get("/", verifyUser, getProperties)
 router.get("/:id", verifyUser, getProperty)
 
 // Update property
-router.put("/:id", verifyUser, updateProperty)
+router.put("/:id", verifyUser, validateRequest(updatePropertySchema), updateProperty)
 
 // Delete property
 router.delete("/:id", verifyUser, deleteProperty)

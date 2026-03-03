@@ -34,4 +34,12 @@ const LeaseSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for better query performance
+LeaseSchema.index({ business: 1 });
+LeaseSchema.index({ business: 1, status: 1 });
+LeaseSchema.index({ tenant: 1 });
+LeaseSchema.index({ unit: 1 });
+LeaseSchema.index({ startDate: -1 });
+LeaseSchema.index({ endDate: 1 });
+
 export default mongoose.model("Lease", LeaseSchema);

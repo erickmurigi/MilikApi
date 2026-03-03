@@ -31,4 +31,12 @@ const ExpensePropertySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for better query performance
+ExpensePropertySchema.index({ business: 1 });
+ExpensePropertySchema.index({ business: 1, date: -1 });
+ExpensePropertySchema.index({ property: 1 });
+ExpensePropertySchema.index({ unit: 1 });
+ExpensePropertySchema.index({ category: 1 });
+ExpensePropertySchema.index({ date: -1 });
+
 export default mongoose.model("ExpenseProperty", ExpensePropertySchema);

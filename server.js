@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import bodyParser from "body-parser";
+import rateLimit from "express-rate-limit";
 dotenv.config();
 import http from "http";
 import { Server } from "socket.io";
@@ -45,6 +45,12 @@ import { log } from "console";
 
 const startServer = async () => {
   const server = http.createServer(app);
+  
+  // Set server timeout (2 minutes)
+  server.timeout = 120000;
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  
   // Enhanced CORS configuration
 const allowedOrigins = [
     "http://localhost:5173",
@@ -90,13 +96,9 @@ app.options('*', cors({
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
 }));
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Or if you're using body-parser directly
-
-app.use(bodyParser.json({ limit: '100mb' }));
-app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 // Additional headers middleware
 app.use((req, res, next) => {
     // Set CORS headers for all responses
@@ -165,6 +167,32 @@ app.use(morgan("common"));
 
 app.use(express.json());
 
+// Rate limiting configuration
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 login attempts per windowMs
+  message: { 
+    success: false, 
+    message: 'Too many login attempts, please try again after 15 minutes' 
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: { 
+    success: false, 
+    message: 'Too many requests, please try again later' 
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply general rate limiting to all routes
+app.use(generalLimiter);
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -205,7 +233,8 @@ app.get('/api', (req, res) => {
 
 // Endpoints to access API
 
-app.use('/api/auth', authRoutes);
+// Apply strict rate limiting to authentication endpoints
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', userRoutes);
 
 app.use("/api/printers", printerRoute);
@@ -231,12 +260,12 @@ app.use('/api/companies', companyRoutes);
 // Error handling middleware
 app.use((err, req, res, next) => {
     const errorStatus = err.status || 500;
-    const errorMessage = err.message || "Something wbbbbent wrong!";
+    const errorMessage = err.message || "Something went wrong!";
     return res.status(errorStatus).json({
         success: false,
         status: errorStatus,
         message: errorMessage,
-        stack: err.stack,
+        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
 });
   const connect = async () => {

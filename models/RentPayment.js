@@ -77,4 +77,14 @@ RentPaymentSchema.pre('save', function(next) {
   next();
 });
 
+// Indexes for better query performance
+RentPaymentSchema.index({ business: 1 });
+RentPaymentSchema.index({ business: 1, paymentDate: -1 });
+RentPaymentSchema.index({ tenant: 1 });
+RentPaymentSchema.index({ unit: 1 });
+RentPaymentSchema.index({ paymentDate: -1 });
+RentPaymentSchema.index({ referenceNumber: 1 }, { unique: true });
+RentPaymentSchema.index({ receiptNumber: 1 }, { unique: true, sparse: true });
+RentPaymentSchema.index({ year: -1, month: -1 });
+
 export default mongoose.model("RentPayment", RentPaymentSchema);

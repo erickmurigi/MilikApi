@@ -49,4 +49,12 @@ const UnitSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for better query performance
+UnitSchema.index({ business: 1 });
+UnitSchema.index({ business: 1, status: 1 });
+UnitSchema.index({ property: 1 });
+UnitSchema.index({ property: 1, status: 1 });
+UnitSchema.index({ unitNumber: 1, property: 1 }, { unique: true });
+UnitSchema.index({ isVacant: 1 });
+
 export default mongoose.model("Unit", UnitSchema);

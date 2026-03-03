@@ -183,7 +183,7 @@ const PropertySchema = new mongoose.Schema(
     // Status
     status: { 
       type: String, 
-      enum: ['active', 'maintenance', 'closed'], 
+      enum: ['active', 'maintenance', 'closed', 'archived'], 
       default: 'active' 
     },
     
@@ -226,6 +226,13 @@ PropertySchema.virtual('fullAddress').get(function() {
   
   return parts.join(', ');
 });
+
+// Indexes for better query performance
+PropertySchema.index({ business: 1 });
+PropertySchema.index({ business: 1, propertyStatus: 1 });
+PropertySchema.index({ propertyCode: 1 }, { unique: true });
+PropertySchema.index({ 'landlords._id': 1 });
+PropertySchema.index({ createdAt: -1 });
 
 // Update unit counts when units change
 PropertySchema.statics.updateUnitCounts = async function(propertyId) {

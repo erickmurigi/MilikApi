@@ -42,4 +42,12 @@ const TenantSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for better query performance
+TenantSchema.index({ business: 1 });
+TenantSchema.index({ business: 1, status: 1 });
+TenantSchema.index({ unit: 1 });
+TenantSchema.index({ idNumber: 1 }, { unique: true });
+TenantSchema.index({ phone: 1 });
+TenantSchema.index({ moveInDate: -1 });
+
 export default mongoose.model("Tenant", TenantSchema);
