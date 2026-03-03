@@ -199,12 +199,13 @@ export const registerUser = async (req, res, next) => {
 export const getCurrentUser = async (req, res, next) => {
   try {
     if (req.user?.isSystemAdmin) {
+      const adminCreds = getAdminCredentials();
       return res.status(200).json({
         success: true,
         user: {
           _id: "milik-admin",
-          email: MILIK_ADMIN_EMAIL,
-          surname: MILIK_ADMIN_NAME,
+          email: adminCreds.email,
+          surname: adminCreds.name,
           otherNames: "",
           profile: "Administrator",
           superAdminAccess: true,

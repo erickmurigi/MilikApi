@@ -37,7 +37,7 @@ router.get("/payments/:id", verifyUser, getTenantPayments)
 
 // Get tenant balance
 router.get("/balance/:id", verifyUser, getTenantBalance)
-router.get('/:id/total-due', async (req, res, next) => {
+router.get('/:id/total-due', verifyUser, async (req, res, next) => {
   try {
     const totalDue = await getTenantTotalDue(req.params.id);
     res.status(200).json(totalDue);

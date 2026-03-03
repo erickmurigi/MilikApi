@@ -38,7 +38,7 @@ router.put("/status/:id", verifyUser, updateUnitStatus)
 router.get("/find/available", verifyUser, getAvailableUnits)
 
 
-router.get('/:id/utilities', getUnitUtilities);
-router.post('/:id/utilities', addUtilityToUnit);
-router.delete('/:unitId/utilities/:utilityId', removeUtilityFromUnit);
+router.get('/:id/utilities', verifyUser, getUnitUtilities);
+router.post('/:id/utilities', verifyUser, addUtilityToUnit);
+router.delete('/:unitId/utilities/:utilityId', verifyUser, removeUtilityFromUnit);
 export default router
