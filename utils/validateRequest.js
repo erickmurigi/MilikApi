@@ -18,8 +18,14 @@ export const validateRequest = (schema, source = 'body') => {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
-        // Format Zod errors for better readability
-        const formattedErrors = error.errors.map(err => ({
+        // Format Zod errors for better readability (Zod v3/v4 compatible)
+        const zodIssues = Array.isArray(error.issues)
+          ? error.issues
+          : Array.isArray(error.errors)
+            ? error.errors
+            : [];
+
+        const formattedErrors = zodIssues.map(err => ({
           field: err.path.join('.'),
           message: err.message
         }));
@@ -52,7 +58,13 @@ export const validateMultiple = (schemas) => {
           req[source] = validatedData;
         } catch (error) {
           if (error instanceof z.ZodError) {
-            error.errors.forEach(err => {
+            const zodIssues = Array.isArray(error.issues)
+              ? error.issues
+              : Array.isArray(error.errors)
+                ? error.errors
+                : [];
+
+            zodIssues.forEach(err => {
               errors.push({
                 source,
                 field: err.path.join('.'),

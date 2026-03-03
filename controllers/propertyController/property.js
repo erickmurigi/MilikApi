@@ -4,7 +4,7 @@ import Property from "../../models/Property.js";
 import Unit from "../../models/Unit.js";
 import Tenant from "../../models/Tenant.js";
 
-// Create property
+    // Create property
 export const createProperty = async (req, res) => {
   try {
     const {
@@ -57,6 +57,14 @@ export const createProperty = async (req, res) => {
       });
     }
 
+    // Validate required fields
+    if (!propertyCode?.trim() || !propertyName?.trim() || !lrNumber?.trim() || !propertyType?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Property Code, Name, LR Number, and Type are required fields'
+      });
+    }
+
     // Security: Use authenticated user's company, not client-provided business
     const businessId = req.user?.company;
     if (!businessId) {
@@ -68,10 +76,10 @@ export const createProperty = async (req, res) => {
 
     // Prepare banking details
     const bankingDetails = {
-      drawerBank,
-      bankBranch,
-      accountName,
-      accountNumber
+      drawerBank: drawerBank || '',
+      bankBranch: bankBranch || '',
+      accountName: accountName || '',
+      accountNumber: accountNumber || ''
     };
 
     // Get user ID from JWT (stored as 'id' or '_id') or request body
@@ -86,15 +94,44 @@ export const createProperty = async (req, res) => {
     if (multiStoreyType && multiStoreyType.trim() !== '') cleanedData.multiStoreyType = multiStoreyType;
     if (category && category.trim() !== '') cleanedData.category = category;
 
-    // Create property
+    // Filter and validate landlords - only include entries with name
+    const validLandlords = (landlords || [])
+      .filter(landlord => landlord?.name?.trim())
+      .map((landlord, index) => ({
+        name: landlord.name.trim(),
+        contact: landlord.contact?.trim() || '',
+        isPrimary: index === 0
+      }));
+
+    // Filter and validate standing charges - only include entries with serviceCharge
+    const validStandingCharges = (standingCharges || [])
+      .filter(charge => charge?.serviceCharge?.trim())
+      .map(charge => ({
+        serviceCharge: charge.serviceCharge.trim(),
+        chargeMode: charge.chargeMode || 'Monthly',
+        billingCurrency: charge.billingCurrency || 'KES',
+        costPerArea: charge.costPerArea?.trim() || '',
+        chargeValue: Math.max(0, parseFloat(charge.chargeValue) || 0),
+        vatRate: charge.vatRate || '16%',
+        escalatesWithRent: charge.escalatesWithRent || false
+      }));
+
+    // Filter and validate security deposits - only include entries with type
+    const validSecurityDeposits = (securityDeposits || [])
+      .filter(deposit => deposit?.depositType?.trim())
+      .map(deposit => ({
+        depositType: deposit.depositType.trim(),
+        amount: Math.max(0, parseFloat(deposit.amount) || 0),
+        currency: deposit.currency || 'KES',
+        refundable: deposit.refundable !== false,
+        terms: deposit.terms?.trim() || ''
+      }));
+
+    // Create property with validated data
     const property = new Property({
       dateAcquired: dateAcquired ? new Date(dateAcquired) : null,
       letManage,
-      landlords: (landlords || []).map((landlord, index) => ({
-        name: landlord.name || '',
-        contact: landlord.contact || '',
-        isPrimary: index === 0
-      })),
+      landlords: validLandlords.length > 0 ? validLandlords : [{ name: 'Default', contact: '', isPrimary: true }],
       propertyCode,
       propertyName,
       lrNumber,
@@ -115,15 +152,8 @@ export const createProperty = async (req, res) => {
       mpesaPaybill,
       disableMpesaStkPush,
       mpesaNarration,
-      standingCharges: (standingCharges || []).map(charge => ({
-        ...charge,
-        chargeValue: parseFloat(charge.chargeValue) || 0,
-        costPerArea: charge.costPerArea || ''
-      })),
-      securityDeposits: (securityDeposits || []).map(deposit => ({
-        ...deposit,
-        amount: parseFloat(deposit.amount) || 0
-      })),
+      standingCharges: validStandingCharges,
+      securityDeposits: validSecurityDeposits,
       smsExemptions,
       emailExemptions,
       excludeFeeSummary,
@@ -149,16 +179,25 @@ export const createProperty = async (req, res) => {
     console.error('Create property error:', error);
     
     // Provide clear validation error messages
-    let errorMessage = error.message;
+    let errorMessage = error.message || 'Failed to create property';
+    let statusCode = 500;
     
-    if (error.name === 'ValidationError') {
-      const validationErrors = Object.values(error.errors).map(err => err.message);
-      errorMessage = validationErrors.join('; ');
+    if (error.name === 'ValidationError' && error.errors) {
+      const validationErrors = Object.values(error.errors)
+        .filter(err => err && err.message)
+        .map(err => err.message);
+      if (validationErrors.length > 0) {
+        errorMessage = validationErrors.join('; ');
+        statusCode = 400;
+      }
     } else if (error.code === 11000) {
       errorMessage = 'A property with this code already exists';
+      statusCode = 400;
+    } else if (error.statusCode) {
+      statusCode = error.statusCode;
     }
     
-    res.status(400).json({ 
+    res.status(statusCode).json({ 
       success: false,
       message: errorMessage
     });
@@ -340,16 +379,25 @@ export const updateProperty = async(req, res, next) => {
     console.error('Update property error:', error);
     
     // Provide clear validation error messages
-    let errorMessage = error.message;
+    let errorMessage = error.message || 'Failed to update property';
+    let statusCode = 500;
     
-    if (error.name === 'ValidationError') {
-      const validationErrors = Object.values(error.errors).map(err => err.message);
-      errorMessage = validationErrors.join('; ');
+    if (error.name === 'ValidationError' && error.errors) {
+      const validationErrors = Object.values(error.errors)
+        .filter(err => err && err.message)
+        .map(err => err.message);
+      if (validationErrors.length > 0) {
+        errorMessage = validationErrors.join('; ');
+        statusCode = 400;
+      }
     } else if (error.code === 11000) {
       errorMessage = 'A property with this code already exists';
+      statusCode = 400;
+    } else if (error.statusCode) {
+      statusCode = error.statusCode;
     }
     
-    res.status(400).json({ 
+    res.status(statusCode).json({ 
       success: false,
       message: errorMessage 
     });

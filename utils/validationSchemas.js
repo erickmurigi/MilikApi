@@ -21,12 +21,16 @@ export const createUserSchema = z.object({
 export const createPropertySchema = z.object({
   propertyCode: z.string().min(1, "Property code is required"),
   propertyName: z.string().min(1, "Property name is required"),
-  category: z.string().min(1, "Category is required"),
+  lrNumber: z.string().min(1, "LR number is required"),
+  category: z.string().optional(),
   propertyType: z.string().min(1, "Property type is required"),
-  country: z.string().min(1, "Country is required"),
-  townCityState: z.string().min(1, "Town/City/State is required"),
+  country: z.string().optional(),
+  townCityState: z.string().optional(),
   address: z.string().optional(),
-  status: z.enum(['Active', 'Inactive']).default('Active')
+  status: z
+    .enum(['active', 'inactive', 'Active', 'Inactive'])
+    .transform((value) => value.toLowerCase())
+    .default('active')
 });
 
 export const updatePropertySchema = createPropertySchema.partial();
