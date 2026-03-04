@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 
 const TenantSchema = new mongoose.Schema(
   {
+    tenantCode: { type: String, unique: true, sparse: true },
     name: { type: String, required: true },
   
     phone: { type: String, required: true },
@@ -36,6 +37,12 @@ const TenantSchema = new mongoose.Schema(
       url: { type: String },
       uploadedAt: { type: Date, default: Date.now }
     }],
+    utilities: [{
+      utility: { type: String },
+      utilityLabel: { type: String },
+      unitCharge: { type: Number, default: 0 },
+      isIncluded: { type: Boolean, default: false }
+    }],
     profileImage: { type: String, default: "" },
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
@@ -45,6 +52,7 @@ const TenantSchema = new mongoose.Schema(
 // Indexes for better query performance
 TenantSchema.index({ business: 1 });
 TenantSchema.index({ business: 1, status: 1 });
+TenantSchema.index({ business: 1, tenantCode: 1 });
 TenantSchema.index({ unit: 1 });
 TenantSchema.index({ idNumber: 1 }, { unique: true });
 TenantSchema.index({ phone: 1 });

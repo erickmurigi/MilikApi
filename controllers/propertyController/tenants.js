@@ -16,8 +16,38 @@ export const createTenant = async (req, res, next) => {
             return res.status(400).json({ message: "Unit is not available" });
         }
 
+        // Auto-generate tenant code if not provided
+        let tenantCode = req.body.tenantCode;
+        if (!tenantCode || tenantCode.trim() === '') {
+            // Find all existing tenant codes for this business
+            const existingTenants = await Tenant.find({ 
+                business: req.user.company,
+                tenantCode: { $regex: /^TT\d+$/ } // Match TT followed by numbers
+            })
+            .select('tenantCode')
+            .lean();
+
+            if (existingTenants && existingTenants.length > 0) {
+                // Extract numbers from all codes and find the max
+                const numbers = existingTenants
+                    .map(t => parseInt(t.tenantCode.replace('TT', '')))
+                    .filter(n => !isNaN(n));
+                
+                const maxNumber = Math.max(...numbers);
+                const nextNumber = maxNumber + 1;
+                tenantCode = `TT${String(nextNumber).padStart(4, '0')}`;
+            } else {
+                // First tenant for this business
+                tenantCode = 'TT0001';
+            }
+        }
+
         // Security: Use authenticated user's company, not client-provided business
-        const newTenant = new Tenant({ ...req.body, business: req.user.company });
+        const newTenant = new Tenant({ 
+            ...req.body, 
+            tenantCode,
+            business: req.user.company 
+        });
         const savedTenant = await newTenant.save();
 
         // Get the property associated with this unit
@@ -60,8 +90,8 @@ export const getTenants = async (req, res, next) => {
         if (unit) filter.unit = unit;
 
         const tenants = await Tenant.find(filter)
-            .populate('unit', 'unitNumber property rent status')
-            .populate('unit.property', 'name address')
+            .populate('unit', 'unitNumber property rent status utilities')
+            .populate('unit.property', 'name address propertyName propertyType')
             .sort({ createdAt: -1 });
         res.status(200).json(tenants);
     } catch (err) {
@@ -73,8 +103,8 @@ export const getTenants = async (req, res, next) => {
 export const getTenant = async (req, res, next) => {
     try {
         const tenant = await Tenant.findById(req.params.id)
-            .populate('unit', 'unitNumber property rent amenities status')
-            .populate('unit.property', 'name address propertyType');
+            .populate('unit', 'unitNumber property rent amenities status utilities')
+            .populate('unit.property', 'name address propertyName propertyType');
         if (!tenant) return res.status(404).json({ message: "Tenant not found" });
         res.status(200).json(tenant);
     } catch (err) {
@@ -332,5 +362,58 @@ export const updatePropertyUnitCounts = async (propertyId) => {
     } catch (error) {
         console.error('Error updating property unit counts:', error);
         throw error;
+    }
+};
+
+// Migration endpoint: Assign tenant codes to existing tenants without codes
+export const migrateTenantCodes = async (req, res, next) => {
+    try {
+        const business = req.user.company;
+
+        // Find all tenants without tenant codes, sorted by creation date (oldest first)
+        const tenantsWithoutCodes = await Tenant.find({
+            business,
+            $or: [
+                { tenantCode: { $exists: false } },
+                { tenantCode: null },
+                { tenantCode: '' }
+            ]
+        }).sort({ createdAt: 1 }); // Oldest first
+
+        if (tenantsWithoutCodes.length === 0) {
+            return res.status(200).json({
+                message: 'No tenants found without codes',
+                updated: 0
+            });
+        }
+
+        let updatedCount = 0;
+        const updates = [];
+
+        // Assign codes sequentially starting from TT0001
+        for (let i = 0; i < tenantsWithoutCodes.length; i++) {
+            const tenant = tenantsWithoutCodes[i];
+            const tenantCode = `TT${String(i + 1).padStart(4, '0')}`;
+            
+            try {
+                await Tenant.findByIdAndUpdate(tenant._id, { tenantCode });
+                updatedCount++;
+                updates.push({
+                    tenantId: tenant._id,
+                    tenantName: tenant.name,
+                    assignedCode: tenantCode
+                });
+            } catch (err) {
+                console.error(`Failed to update tenant ${tenant._id}:`, err);
+            }
+        }
+
+        res.status(200).json({
+            message: `Successfully assigned codes to ${updatedCount} tenants`,
+            updated: updatedCount,
+            details: updates
+        });
+    } catch (err) {
+        next(err);
     }
 };

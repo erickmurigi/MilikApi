@@ -24,7 +24,7 @@ const UnitSchema = new mongoose.Schema(
     },
     amenities: [{ type: String }],
     utilities: [{
-      utility: { type: mongoose.Schema.Types.ObjectId, ref: 'Utility' },
+      utility: { type: String },
       isIncluded: { type: Boolean, default: false },
       unitCharge: { type: Number, default: 0 }
     }],

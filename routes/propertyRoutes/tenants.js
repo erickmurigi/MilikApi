@@ -8,7 +8,9 @@ import {
   deleteTenant,
   updateTenantStatus,
   getTenantPayments,
-  getTenantBalance , getTenantTotalDue
+  getTenantBalance, 
+  getTenantTotalDue,
+  migrateTenantCodes
 } from "../../controllers/propertyController/tenants.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
 
@@ -37,6 +39,10 @@ router.get("/payments/:id", verifyUser, getTenantPayments)
 
 // Get tenant balance
 router.get("/balance/:id", verifyUser, getTenantBalance)
+
+// Migration: Assign codes to existing tenants without codes
+router.post("/migrate-codes", verifyUser, migrateTenantCodes)
+
 router.get('/:id/total-due', verifyUser, async (req, res, next) => {
   try {
     const totalDue = await getTenantTotalDue(req.params.id);
