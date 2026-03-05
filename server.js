@@ -56,7 +56,7 @@ const startServer = async () => {
 const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:5174",
-    "https://milik-pms.vercel.app",
+    "https://milik-system.vercel.app/",
     "https://milik.com",
     
 ];
