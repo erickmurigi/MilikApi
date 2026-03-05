@@ -33,6 +33,7 @@ import expensePropertyRoutes from "./routes/propertyRoutes/expensesProperties.js
 import notificationRoutes from "./routes/propertyRoutes/notifications.js"
 import DashboardRoutes from "./controllers/propertyController/dashboard.js"
 import companyRoutes from "./routes/companies.js";
+import companySettingsRoutes from "./routes/companySettings.js";
 // Import your Sale model
 
 import ngrok from '@ngrok/ngrok';
@@ -55,6 +56,7 @@ const startServer = async () => {
 const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:5174",
+    "https://milik-pms.vercel.app",
     "https://milik.com",
     
 ];
@@ -252,6 +254,7 @@ app.use("/api/propertyexpenses", expensePropertyRoutes)
 app.use("/api/notifications", notificationRoutes)
 app.use("/api/dashboard", DashboardRoutes)
 app.use('/api/companies', companyRoutes);
+app.use('/api/company-settings', companySettingsRoutes);
 
 
 

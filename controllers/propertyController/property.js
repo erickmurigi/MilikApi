@@ -98,6 +98,7 @@ export const createProperty = async (req, res) => {
     const validLandlords = (landlords || [])
       .filter(landlord => landlord?.name?.trim())
       .map((landlord, index) => ({
+        landlordId: landlord.landlordId || null, // Store the Landlord ID if provided
         name: landlord.name.trim(),
         contact: landlord.contact?.trim() || '',
         isPrimary: index === 0

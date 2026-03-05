@@ -2,6 +2,7 @@
 import mongoose from "mongoose";
 
 const landlordSchema = new mongoose.Schema({
+  landlordId: { type: mongoose.Schema.Types.ObjectId, ref: 'Landlord' }, // Reference to Landlord collection
   name: { type: String, required: true },
   contact: { type: String },
   isPrimary: { type: Boolean, default: false }

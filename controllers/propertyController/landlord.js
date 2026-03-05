@@ -113,10 +113,33 @@ export const getLandlords = async(req, res, next) => {
             .populate('company', 'companyName')
             .sort({ createdAt: -1 });
         
+        // Fetch property counts for each landlord
+        const landlordsWithCounts = await Promise.all(
+            landlords.map(async (landlord) => {
+                // Count ACTIVE properties for this landlord
+                const activeProperties = await Property.countDocuments({
+                    'landlords.landlordId': landlord._id,
+                    status: { $ne: 'archived' }
+                });
+                
+                // Count ARCHIVED properties for this landlord  
+                const archivedProperties = await Property.countDocuments({
+                    'landlords.landlordId': landlord._id,
+                    status: 'archived'
+                });
+                
+                return {
+                    ...landlord.toObject(),
+                    activeProperties,
+                    archivedProperties
+                };
+            })
+        );
+        
         res.status(200).json({
             success: true,
-            data: landlords,
-            count: landlords.length
+            data: landlordsWithCounts,
+            count: landlordsWithCounts.length
         });
     } catch (err) {
         console.error('Get landlords error:', err);
@@ -203,7 +226,7 @@ export const updateLandlord = async(req, res, next) => {
 export const deleteLandlord = async(req, res, next) => {
     try {
         // Check if landlord has properties
-        const properties = await Property.countDocuments({ 'landlords._id': req.params.id });
+        const properties = await Property.countDocuments({ 'landlords.landlordId': req.params.id });
         if (properties > 0) {
             return res.status(400).json({ 
                 success: false,
@@ -240,16 +263,33 @@ export const getLandlordStats = async(req, res, next) => {
     try {
         const landlordId = req.params.id;
         
-        const totalProperties = await Property.countDocuments({ 'landlords._id': landlordId });
+        // Get all properties for this landlord
+        const properties = await Property.find({ 'landlords.landlordId': landlordId });
+        const propertyIds = properties.map(p => p._id);
+        
+        // Count total properties (active + archived)
+        const totalProperties = properties.length;
+        
+        // Count active vs archived
+        const activeProperties = await Property.countDocuments({
+            'landlords.landlordId': landlordId,
+            status: { $ne: 'archived' }
+        });
+        const archivedProperties = await Property.countDocuments({
+            'landlords.landlordId': landlordId,
+            status: 'archived'
+        });
+        
+        // Count units across all properties
         const totalUnits = await Unit.countDocuments({ 
-            property: { $in: await Property.find({ 'landlords._id': landlordId }).distinct('_id') }
+            property: { $in: propertyIds }
         });
         const occupiedUnits = await Unit.countDocuments({ 
-            property: { $in: await Property.find({ 'landlords._id': landlordId }).distinct('_id') },
+            property: { $in: propertyIds },
             status: 'occupied'
         });
         const vacantUnits = await Unit.countDocuments({ 
-            property: { $in: await Property.find({ 'landlords._id': landlordId }).distinct('_id') },
+            property: { $in: propertyIds },
             status: 'vacant'
         });
 
@@ -257,6 +297,8 @@ export const getLandlordStats = async(req, res, next) => {
             success: true,
             data: {
                 totalProperties,
+                activeProperties,
+                archivedProperties,
                 totalUnits,
                 occupiedUnits,
                 vacantUnits,
