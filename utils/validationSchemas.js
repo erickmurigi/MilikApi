@@ -28,7 +28,7 @@ export const createPropertySchema = z.object({
   townCityState: z.string().optional(),
   address: z.string().optional(),
   status: z
-    .enum(['active', 'inactive', 'Active', 'Inactive'])
+    .enum(['active', 'inactive', 'archived', 'Active', 'Inactive', 'Archived'])
     .transform((value) => value.toLowerCase())
     .default('active')
 }).passthrough();

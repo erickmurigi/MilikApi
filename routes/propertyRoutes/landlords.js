@@ -6,7 +6,8 @@ import {
   getLandlords, 
   updateLandlord, 
   deleteLandlord, 
-  getLandlordStats 
+  getLandlordStats,
+  bulkImportLandlords
 } from "../../controllers/propertyController/landlord.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
 
@@ -14,6 +15,9 @@ const router = express.Router()
 
 // Create landlord
 router.post("/", verifyUser, createLandlord)
+
+// Bulk import landlords
+router.post("/bulk-import", verifyUser, bulkImportLandlords)
 
 // Get all landlords
 router.get("/", verifyUser, getLandlords)

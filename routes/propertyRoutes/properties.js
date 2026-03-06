@@ -9,7 +9,8 @@ import {
   updateProperty,
   deleteProperty,
   getPropertyUnits,
-  getPropertyTenants
+  getPropertyTenants,
+  bulkImportProperties
 } from "../../controllers/propertyController/property.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
 
@@ -17,6 +18,9 @@ const router = express.Router()
 
 // Create property
 router.post("/", verifyUser, validateRequest(createPropertySchema), createProperty)
+
+// Bulk import properties
+router.post("/bulk-import", verifyUser, bulkImportProperties)
 
 // Get all properties
 router.get("/", verifyUser, getProperties)

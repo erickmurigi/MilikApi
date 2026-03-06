@@ -351,6 +351,163 @@ export const getAvailableUnits = async(req, res, next) => {
     }
 }
 
+// Bulk import units from Excel
+export const bulkImportUnits = async (req, res, next) => {
+    try {
+        const { units: unitsData, business } = req.body;
+
+        console.log('=== UNITS BULK IMPORT START ===');
+        console.log('Business ID:', business);
+        console.log('Units to import:', unitsData.length);
+
+        // Validate business context
+        if (!business) {
+            return res.status(400).json({
+                success: false,
+                message: "Business context is required"
+            });
+        }
+
+        if (!Array.isArray(unitsData) || unitsData.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "No units data provided"
+            });
+        }
+
+        if (unitsData.length > 1000) {
+            return res.status(400).json({
+                success: false,
+                message: "Maximum 1000 units per import"
+            });
+        }
+
+        const successful = [];
+        const failed = [];
+
+        // Get all properties for code matching
+        const properties = await Property.find({ business });
+        console.log('Properties found:', properties.length);
+        console.log('Property codes:', properties.map(p => ({ code: p.propertyCode, name: p.propertyName, id: p._id })));
+        
+        const propertyMap = new Map(
+            properties.map(p => [p.propertyCode?.toLowerCase() || '', p._id])
+        );
+
+        // Get existing unit numbers per property to check for duplicates
+        const existingUnits = await Unit.find({ business });
+        const unitKeySet = new Set(
+            existingUnits.map(u => `${u.property}-${u.unitNumber.toLowerCase()}`)
+        );
+
+        for (let i = 0; i < unitsData.length; i++) {
+            const record = unitsData[i];
+            console.log(`\nProcessing unit ${i + 1}:`, record.unitNumber, 'Property Code:', record.propertyCode);
+            
+            try {
+                // Find property by code
+                const propertyId = propertyMap.get(record.propertyCode.toLowerCase());
+                if (!propertyId) {
+                    console.log(`  ❌ Property code "${record.propertyCode}" not found. Available codes:`, Array.from(propertyMap.keys()));
+                    failed.push({
+                        row: i + 2,
+                        unitNumber: record.unitNumber,
+                        error: `Property code "${record.propertyCode}" not found`
+                    });
+                    continue;
+                }
+
+                console.log(`  ✓ Found property:`, propertyId);
+
+                // Check for duplicate unit number in same property
+                const unitKey = `${propertyId}-${record.unitNumber.toLowerCase()}`;
+                if (unitKeySet.has(unitKey)) {
+                    console.log(`  ❌ Duplicate unit number in property`);
+                    failed.push({
+                        row: i + 2,
+                        unitNumber: record.unitNumber,
+                        error: 'Unit number already exists in this property'
+                    });
+                    continue;
+                }
+
+                // Create unit
+                const newUnit = new Unit({
+                    unitNumber: record.unitNumber.trim(),
+                    property: propertyId,
+                    unitType: record.unitType.toLowerCase(),
+                    rent: record.rent || 0,
+                    deposit: record.deposit || 0,
+                    amenities: record.amenities || [],
+                    utilities: record.utilities?.map(util => ({
+                        utility: util,
+                        isIncluded: false,
+                        unitCharge: 0
+                    })) || [],
+                    status: record.status?.toLowerCase() || 'vacant',
+                    isVacant: record.status?.toLowerCase() === 'vacant' ? true : false,
+                    description: record.description || '',
+                    business,
+                    createdBy: req.user._id
+                });
+
+                await newUnit.save();
+                console.log(`  ✓ Unit created:`, newUnit._id);
+                
+                // Add to unit key set to prevent duplicates in batch
+                unitKeySet.add(unitKey);
+
+                successful.push({
+                    unitNumber: record.unitNumber,
+                    propertyCode: record.propertyCode,
+                    _id: newUnit._id
+                });
+
+            } catch (error) {
+                console.log(`  ❌ Error:`, error.message);
+                failed.push({
+                    row: i + 2,
+                    unitNumber: record.unitNumber,
+                    error: error.message || 'Failed to create unit'
+                });
+            }
+        }
+
+        // Update property unit counts for affected properties
+        const affectedPropertyIds = new Set();
+        for (const success of successful) {
+            const propCode = success.propertyCode.toLowerCase();
+            const propId = propertyMap.get(propCode);
+            if (propId) {
+                affectedPropertyIds.add(propId);
+            }
+        }
+
+        for (const propertyId of affectedPropertyIds) {
+            if (propertyId) {
+                await updatePropertyUnitCounts(propertyId);
+            }
+        }
+
+        console.log(`\n=== IMPORT COMPLETE ===`);
+        console.log(`Successful: ${successful.length}, Failed: ${failed.length}`);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                successful,
+                failed,
+                totalProcessed: unitsData.length,
+                successCount: successful.length,
+                failureCount: failed.length
+            }
+        });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
 // Helper function to update property unit counts
 const updatePropertyUnitCounts = async(propertyId) => {
     const totalUnits = await Unit.countDocuments({ property: propertyId });

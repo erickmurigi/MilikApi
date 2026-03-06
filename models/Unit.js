@@ -19,7 +19,7 @@ const UnitSchema = new mongoose.Schema(
     deposit: { type: Number, required: true },
     status: { 
       type: String, 
-      enum: ['vacant', 'occupied', 'maintenance', 'reserved'],
+      enum: ['vacant', 'occupied', 'maintenance', 'reserved', 'archived'],
       default: 'vacant' 
     },
     amenities: [{ type: String }],

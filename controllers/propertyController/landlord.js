@@ -373,3 +373,159 @@ export const getLandlordStats = async(req, res, next) => {
         });
     }
 }
+
+// Bulk import landlords from Excel
+export const bulkImportLandlords = async (req, res, next) => {
+    try {
+        const { landlords, business } = req.body;
+
+        if (!Array.isArray(landlords) || landlords.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "No landlords provided for import"
+            });
+        }
+
+        if (landlords.length > 1000) {
+            return res.status(400).json({
+                success: false,
+                message: "Maximum 1000 landlords allowed per import"
+            });
+        }
+
+        // Use authenticated user's company
+        const companyId = req.user?.company || business;
+        
+        if (!companyId) {
+            return res.status(400).json({
+                success: false,
+                message: "Company context is required"
+            });
+        }
+
+        const createdById = mongoose.Types.ObjectId.isValid(req.user?._id)
+            ? req.user._id
+            : undefined;
+
+        const results = {
+            successful: [],
+            failed: [],
+            totalProcessed: 0
+        };
+
+        // Check for existing emails, regIds, and taxPins in database
+        const emails = landlords.map(l => l.email).filter(Boolean);
+        const regIds = landlords.map(l => l.regId).filter(Boolean);
+        const taxPins = landlords.map(l => l.taxPin).filter(Boolean);
+
+        const existingLandlords = await Landlord.find({
+            $or: [
+                { email: { $in: emails } },
+                { regId: { $in: regIds } },
+                { taxPin: { $in: taxPins } }
+            ]
+        }).select('email regId taxPin');
+
+        const existingEmails = new Set(existingLandlords.map(l => l.email));
+        const existingRegIds = new Set(existingLandlords.map(l => l.regId));
+        const existingTaxPins = new Set(existingLandlords.map(l => l.taxPin));
+
+        // Process each landlord
+        for (const landlordData of landlords) {
+            results.totalProcessed++;
+
+            try {
+                // Check for duplicates
+                if (existingEmails.has(landlordData.email)) {
+                    results.failed.push({
+                        landlord: landlordData.landlordName,
+                        error: `Email ${landlordData.email} already exists`
+                    });
+                    continue;
+                }
+
+                if (existingRegIds.has(landlordData.regId)) {
+                    results.failed.push({
+                        landlord: landlordData.landlordName,
+                        error: `Reg/ID Number ${landlordData.regId} already exists`
+                    });
+                    continue;
+                }
+
+                if (existingTaxPins.has(landlordData.taxPin)) {
+                    results.failed.push({
+                        landlord: landlordData.landlordName,
+                        error: `Tax PIN ${landlordData.taxPin} already exists`
+                    });
+                    continue;
+                }
+
+                // Generate landlord code
+                let landlordCode = null;
+                let codeExists = true;
+                let counter = 1;
+
+                while (codeExists) {
+                    landlordCode = `LL${String(counter).padStart(3, '0')}`;
+                    codeExists = await Landlord.findOne({ landlordCode });
+                    counter++;
+                    
+                    // Safety: prevent infinite loop
+                    if (counter > 10000) {
+                        throw new Error('Unable to generate unique landlord code');
+                    }
+                }
+
+                // Create landlord
+                const newLandlord = new Landlord({
+                    landlordCode,
+                    landlordName: landlordData.landlordName,
+                    landlordType: landlordData.landlordType || 'Individual',
+                    regId: landlordData.regId,
+                    idNumber: landlordData.regId, // Keep synced for legacy compatibility
+                    taxPin: landlordData.taxPin,
+                    email: landlordData.email,
+                    phoneNumber: landlordData.phoneNumber,
+                    postalAddress: landlordData.postalAddress || '',
+                    location: landlordData.location || '',
+                    status: landlordData.status || 'Active',
+                    portalAccess: landlordData.portalAccess || 'Disabled',
+                    company: companyId,
+                    createdBy: createdById
+                });
+
+                const savedLandlord = await newLandlord.save();
+
+                // Add to existing sets to catch duplicates within the same batch
+                existingEmails.add(landlordData.email);
+                existingRegIds.add(landlordData.regId);
+                existingTaxPins.add(landlordData.taxPin);
+
+                results.successful.push({
+                    landlord: landlordData.landlordName,
+                    code: landlordCode
+                });
+
+            } catch (error) {
+                results.failed.push({
+                    landlord: landlordData.landlordName,
+                    error: error.message || 'Unknown error'
+                });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Import completed: ${results.successful.length} successful, ${results.failed.length} failed`,
+            data: results
+        });
+
+    } catch (err) {
+        console.error('Bulk import error:', err);
+        res.status(500).json({
+            success: false,
+            message: err.message || "Error importing landlords",
+            error: err
+        });
+    }
+}

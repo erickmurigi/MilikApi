@@ -62,7 +62,7 @@ export const createTenant = async (req, res, next) => {
             isVacant: false,
             vacantSince: null,
             daysVacant: 0,
-            tenant: savedTenant._id // Store reference to tenant
+            lastTenant: savedTenant._id // Store reference to tenant
         });
 
         // Update property unit counts
@@ -388,6 +388,216 @@ export const updatePropertyUnitCounts = async (propertyId) => {
     } catch (error) {
         console.error('Error updating property unit counts:', error);
         throw error;
+    }
+};
+
+// Bulk import tenants from Excel
+export const bulkImportTenants = async (req, res, next) => {
+    try {
+        const { tenants: tenantsData, business } = req.body;
+        
+        console.log('=== TENANTS BULK IMPORT START ===');
+        console.log('Business ID:', business);
+        console.log('Tenants to import:', tenantsData?.length || 0);
+
+        // Validation
+        if (!business) {
+            return res.status(400).json({ message: 'Business context is required' });
+        }
+
+        if (!Array.isArray(tenantsData) || tenantsData.length === 0) {
+            return res.status(400).json({ message: 'No tenant data provided' });
+        }
+
+        if (tenantsData.length > 1000) {
+            return res.status(400).json({ message: 'Maximum 1000 tenants per import' });
+        }
+
+        // Get all units for this business with their properties
+        const units = await Unit.find({ business }).populate('property');
+        console.log('Units found:', units.length);
+        
+        // Create a map of propertyCode+unitNumber to unit IDs for precise lookup
+        const unitMap = new Map();
+        units.forEach(unit => {
+            const propertyCode = unit.property?.propertyCode?.toLowerCase();
+            const unitNumber = unit.unitNumber?.toLowerCase();
+            if (propertyCode && unitNumber) {
+                const key = `${propertyCode}|${unitNumber}`;
+                unitMap.set(key, unit._id);
+            }
+        });
+        console.log('Unit map created with keys:', Array.from(unitMap.keys()).slice(0, 10));
+
+        // Get existing tenants to check for duplicates
+        const existingTenants = await Tenant.find({ business });
+        const existingPhones = new Set(existingTenants.map(t => t.phone?.toLowerCase()));
+        const existingIds = new Set(existingTenants.map(t => t.idNumber?.toLowerCase()));
+        console.log('Existing phones:', existingPhones.size);
+        console.log('Existing IDs:', existingIds.size);
+
+        const successful = [];
+        const failed = [];
+
+        // Process each tenant
+        for (const record of tenantsData) {
+            console.log(`\nProcessing tenant: ${record.tenantName} (Property: ${record.propertyCode}, Unit: ${record.unitNumber})`);
+            const rowIndex = tenantsData.indexOf(record) + 1;
+
+            try {
+                if (!record.propertyCode) {
+                    const error = 'Property Code is required';
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                // Find unit by Property Code + Unit Number
+                const unitLookupKey = `${record.propertyCode.toLowerCase()}|${record.unitNumber.toLowerCase()}`;
+                const unitId = unitMap.get(unitLookupKey);
+                if (!unitId) {
+                    const availableKeys = Array.from(unitMap.keys()).slice(0, 30);
+                    const error = `Combination not found: Property "${record.propertyCode}" + Unit "${record.unitNumber}". Available combinations include: ${availableKeys.join(', ')}`;
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                // Check for duplicate phone
+                if (existingPhones.has(record.phoneNumber.toLowerCase())) {
+                    const error = `Duplicate phone number: ${record.phoneNumber}`;
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                // Check for duplicate ID number
+                if (existingIds.has(record.idNumber.toLowerCase())) {
+                    const error = `Duplicate ID number: ${record.idNumber}`;
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                // Generate tenant code if needed
+                let tenantCode = record.tenantCode;
+                if (!tenantCode || tenantCode.trim() === '') {
+                    const existingCodes = await Tenant.find({ 
+                        business,
+                        tenantCode: { $regex: /^TT\d+$/ } 
+                    }).select('tenantCode').lean();
+
+                    if (existingCodes && existingCodes.length > 0) {
+                        const numbers = existingCodes
+                            .map(t => parseInt(t.tenantCode.replace('TT', '')))
+                            .filter(n => !isNaN(n));
+                        
+                        const maxNumber = Math.max(...numbers);
+                        const nextNumber = maxNumber + 1;
+                        tenantCode = `TT${String(nextNumber).padStart(4, '0')}`;
+                    } else {
+                        tenantCode = 'TT0001';
+                    }
+                }
+
+                // Create new tenant
+                const newTenant = new Tenant({
+                    name: record.tenantName,
+                    phone: record.phoneNumber,
+                    idNumber: record.idNumber,
+                    unit: unitId,
+                    rent: record.rent || 0,
+                    balance: 0,
+                    status: record.status || 'active',
+                    paymentMethod: record.paymentMethod || 'bank_transfer',
+                    moveInDate: new Date(record.moveInDate),
+                    moveOutDate: record.moveOutDate ? new Date(record.moveOutDate) : null,
+                    tenantCode,
+                    business,
+                    emergencyContact: {
+                        name: record.emergencyContactName || '',
+                        phone: record.emergencyContactPhone || '',
+                        relationship: ''
+                    },
+                    description: record.description || ''
+                });
+
+                await newTenant.save();
+
+                // Update unit status to occupied
+                const unitToUpdate = units.find(u => u._id.toString() === unitId.toString());
+                if (unitToUpdate) {
+                    await Unit.findByIdAndUpdate(unitId, {
+                        status: 'occupied',
+                        isVacant: false,
+                        vacantSince: null,
+                        daysVacant: 0,
+                        lastTenant: newTenant._id
+                    });
+
+                    // Update property occupancy counts
+                    const propertyId = unitToUpdate.property._id || unitToUpdate.property;
+                    await Property.findByIdAndUpdate(propertyId, {
+                        $inc: {
+                            occupiedUnits: 1,
+                            vacantUnits: -1
+                        }
+                    });
+                }
+                
+                // Add to local tracking sets
+                existingPhones.add(record.phoneNumber.toLowerCase());
+                existingIds.add(record.idNumber.toLowerCase());
+
+                console.log(`  ✓ Created successfully with code: ${tenantCode}`);
+                
+                successful.push({
+                    tenantName: record.tenantName,
+                    _id: newTenant._id,
+                    tenantCode
+                });
+
+            } catch (error) {
+                const errorMsg = error.message || 'Unknown error occurred';
+                console.log(`  ❌ ${errorMsg}`);
+                failed.push({
+                    tenantName: record.tenantName,
+                    error: errorMsg,
+                    row: rowIndex
+                });
+            }
+        }
+
+        console.log('\n=== IMPORT COMPLETE ===');
+        console.log(`Successful: ${successful.length}, Failed: ${failed.length}`);
+
+        res.status(200).json({
+            successful,
+            failed,
+            totalProcessed: tenantsData.length,
+            successCount: successful.length,
+            failureCount: failed.length
+        });
+
+    } catch (error) {
+        console.error('Bulk import error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to process bulk import' });
     }
 };
 

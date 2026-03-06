@@ -10,7 +10,8 @@ import {
   getTenantPayments,
   getTenantBalance, 
   getTenantTotalDue,
-  migrateTenantCodes
+  migrateTenantCodes,
+  bulkImportTenants
 } from "../../controllers/propertyController/tenants.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
 
@@ -18,6 +19,9 @@ const router = express.Router()
 
 // Create tenant
 router.post("/", verifyUser, createTenant)
+
+// Bulk import tenants from Excel
+router.post("/bulk-import", verifyUser, bulkImportTenants)
 
 // Get all tenants
 router.get("/", verifyUser, getTenants)

@@ -7,10 +7,11 @@ import {
   updateUnit, 
   deleteUnit,
   updateUnitStatus,
-  getAvailableUnits ,
+  getAvailableUnits,
+  bulkImportUnits,
   getUnitUtilities,
-    addUtilityToUnit,
-    removeUtilityFromUnit
+  addUtilityToUnit,
+  removeUtilityFromUnit
 } from "../../controllers/propertyController/units.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
 
@@ -18,6 +19,9 @@ const router = express.Router()
 
 // Create unit
 router.post("/", verifyUser, createUnit)
+
+// Bulk import units
+router.post("/bulk-import", verifyUser, bulkImportUnits)
 
 // Get all units
 router.get("/", verifyUser, getUnits)

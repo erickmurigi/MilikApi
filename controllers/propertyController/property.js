@@ -219,7 +219,19 @@ export const createProperty = async (req, res) => {
 // Get all properties
 export const getProperties = async(req, res, next) => {
     try {
-    const { page = 1, limit = 10, search, status } = req.query;
+    const { 
+      page = 1, 
+      limit = 10, 
+      search, 
+      status, 
+      zone, 
+      category, 
+      code, 
+      name, 
+      lrNumber, 
+      landlord, 
+      location 
+    } = req.query;
     
     // Security: Use authenticated user's company (system admins can query across companies)
     const businessId = req.user.isSystemAdmin && req.query.business 
@@ -234,17 +246,60 @@ export const getProperties = async(req, res, next) => {
     }
 
     const query = { business: businessId };
+    const orConditions = [];
     
+    // General search across multiple fields
     if (search) {
-      query.$or = [
+      orConditions.push(
         { propertyCode: { $regex: search, $options: 'i' } },
         { propertyName: { $regex: search, $options: 'i' } },
         { lrNumber: { $regex: search, $options: 'i' } }
-      ];
+      );
     }
     
+    // Location search across address fields
+    if (location) {
+      orConditions.push(
+        { address: { $regex: location, $options: 'i' } },
+        { townCityState: { $regex: location, $options: 'i' } },
+        { estateArea: { $regex: location, $options: 'i' } },
+        { roadStreet: { $regex: location, $options: 'i' } }
+      );
+    }
+    
+    // Add OR conditions to query if any exist
+    if (orConditions.length > 0) {
+      query.$or = orConditions;
+    }
+    
+    // Specific field filters (AND conditions)
     if (status) {
       query.status = status;
+    }
+    
+    if (zone) {
+      query.zoneRegion = { $regex: zone, $options: 'i' };
+    }
+    
+    if (category) {
+      query.propertyType = { $regex: category, $options: 'i' };
+    }
+    
+    if (code) {
+      query.propertyCode = { $regex: code, $options: 'i' };
+    }
+    
+    if (name) {
+      query.propertyName = { $regex: name, $options: 'i' };
+    }
+    
+    if (lrNumber) {
+      query.lrNumber = { $regex: lrNumber, $options: 'i' };
+    }
+    
+    if (landlord) {
+      // Filter by landlord ID in the landlords array
+      query['landlords.landlordId'] = landlord;
     }
     
     const properties = await Property.find(query)
@@ -506,4 +561,162 @@ export const getPropertyTenants = async(req, res, next) => {
         next(err);
     }
 }
+
+// Bulk import properties
+export const bulkImportProperties = async (req, res, next) => {
+  try {
+    const { properties, business } = req.body;
+    
+    // Validation
+    if (!Array.isArray(properties) || properties.length === 0) {
+      return res.status(400).json({ message: 'Properties array is required' });
+    }
+    
+    if (properties.length > 1000) {
+      return res.status(400).json({ message: 'Maximum 1000 properties per import' });
+    }
+    
+    if (!business) {
+      return res.status(400).json({ message: 'Business/Company ID is required' });
+    }
+
+    // Extract LR numbers and codes to check for duplicates
+    const lrNumbers = properties
+      .filter(p => p.lrNumber)
+      .map(p => p.lrNumber);
+    
+    const providedCodes = properties
+      .filter(p => p.propertyCode)
+      .map(p => p.propertyCode);
+
+    // Query for existing properties
+    const existingByLR = await Property.find({ 
+      lrNumber: { $in: lrNumbers },
+      business: business
+    });
+    
+    const existingByCodes = providedCodes.length > 0 
+      ? await Property.find({ 
+          propertyCode: { $in: providedCodes },
+          business: business
+        })
+      : [];
+
+    // Create Sets for O(1) lookup
+    const existingLRNumbers = new Set(
+      existingByLR.map(p => p.lrNumber)
+    );
+    const existingPropertyCodes = new Set(
+      existingByCodes.map(p => p.propertyCode)
+    );
+
+    // Get the highest existing code number for auto-generation
+    const allProperties = await Property.find({ business: business });
+    let maxCodeNumber = 0;
+    allProperties.forEach(prop => {
+      if (prop.propertyCode && prop.propertyCode.startsWith('PRO')) {
+        const num = parseInt(prop.propertyCode.substring(3));
+        if (!isNaN(num) && num > maxCodeNumber) {
+          maxCodeNumber = num;
+        }
+      }
+    });
+
+    const results = {
+      successful: [],
+      failed: [],
+      totalProcessed: 0
+    };
+
+    // Track duplicates within current batch
+    const seenCodesInBatch = new Set();
+    const seenLRInBatch = new Set();
+
+    for (const property of properties) {
+      results.totalProcessed++;
+      const errors = [];
+
+      // Check LR Number duplicates (existing + batch)
+      if (property.lrNumber) {
+        if (existingLRNumbers.has(property.lrNumber) || seenLRInBatch.has(property.lrNumber)) {
+          errors.push(`LR Number already exists: ${property.lrNumber}`);
+        }
+        seenLRInBatch.add(property.lrNumber);
+      }
+
+      // Check Property Code duplicates if provided
+      if (property.propertyCode) {
+        if (existingPropertyCodes.has(property.propertyCode) || seenCodesInBatch.has(property.propertyCode)) {
+          errors.push(`Property Code already exists: ${property.propertyCode}`);
+        }
+        seenCodesInBatch.add(property.propertyCode);
+      }
+
+      if (errors.length > 0) {
+        results.failed.push({
+          propertyName: property.propertyName,
+          error: errors.join('; ')
+        });
+        continue;
+      }
+
+      try {
+        // Generate code if not provided
+        let propertyCode = property.propertyCode;
+        if (!propertyCode) {
+          // Auto-generate: PRO001, PRO002, etc.
+          let counter = maxCodeNumber + 1;
+          propertyCode = `PRO${String(counter).padStart(3, '0')}`;
+          while (existingPropertyCodes.has(propertyCode) || seenCodesInBatch.has(propertyCode)) {
+            counter++;
+            propertyCode = `PRO${String(counter).padStart(3, '0')}`;
+          }
+          maxCodeNumber = counter;
+        }
+        seenCodesInBatch.add(propertyCode);
+
+        // Create property
+        const newProperty = new Property({
+          propertyCode,
+          propertyName: property.propertyName,
+          lrNumber: property.lrNumber,
+          propertyType: property.propertyType || 'Residential',
+          category: property.category,
+          townCityState: property.townCityState,
+          estateArea: property.estateArea,
+          roadStreet: property.roadStreet,
+          zoneRegion: property.zoneRegion,
+          totalUnits: property.totalUnits || 0,
+          country: 'Kenya',
+          status: property.status || 'active',
+          business: business,
+          createdBy: req.user._id,
+          
+          // Add landlord if provided
+          landlords: property.landlordName ? [{
+            landlordId: null, // Will be looked up separately if needed
+            name: property.landlordName,
+            isPrimary: true
+          }] : []
+        });
+
+        await newProperty.save();
+        
+        results.successful.push({
+          propertyName: property.propertyName,
+          code: propertyCode
+        });
+      } catch (error) {
+        results.failed.push({
+          propertyName: property.propertyName,
+          error: error.message || 'Failed to create property'
+        });
+      }
+    }
+
+    res.status(200).json(results);
+  } catch (err) {
+    next(err);
+  }
+};
 
