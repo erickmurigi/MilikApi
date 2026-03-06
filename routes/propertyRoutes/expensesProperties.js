@@ -19,6 +19,12 @@ router.post("/", verifyUser, createExpense)
 // Get all expenses
 router.get("/", verifyUser, getExpenses)
 
+// Get expense summary
+router.get("/get/summary", verifyUser, getExpenseSummary)
+
+// Get property expenses
+router.get("/property/:propertyId", verifyUser, getPropertyExpenses)
+
 // Get single expense
 router.get("/:id", verifyUser, getExpense)
 
@@ -27,11 +33,5 @@ router.put("/:id", verifyUser, updateExpense)
 
 // Delete expense
 router.delete("/:id", verifyUser, deleteExpense)
-
-// Get expense summary
-router.get("/get/summary", verifyUser, getExpenseSummary)
-
-// Get property expenses
-router.get("/property/:propertyId", verifyUser, getPropertyExpenses)
 
 export default router

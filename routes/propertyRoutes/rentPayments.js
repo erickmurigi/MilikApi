@@ -20,6 +20,9 @@ router.post("/", verifyUser, createPayment)
 // Get all payments
 router.get("/", verifyUser, getPayments)
 
+// Get payment summary
+router.get("/get/summary", verifyUser, getPaymentSummary)
+
 // Get single payment
 router.get("/:id", verifyUser, getPayment)
 
@@ -34,8 +37,5 @@ router.put("/confirm/:id", verifyUser, confirmPayment)
 
 // Unconfirm payment - allows unconfirming to enable deletion
 router.put("/unconfirm/:id", verifyUser, unconfirmPayment)
-
-// Get payment summary
-router.get("/get/summary", verifyUser, getPaymentSummary)
 
 export default router

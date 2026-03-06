@@ -19,6 +19,9 @@ router.post("/", verifyUser, createMaintenance)
 // Get all maintenances
 router.get("/", verifyUser, getMaintenances)
 
+// Get maintenance stats
+router.get("/get/stats", verifyUser, getMaintenanceStats)
+
 // Get single maintenance
 router.get("/:id", verifyUser, getMaintenance)
 
@@ -30,8 +33,5 @@ router.delete("/:id", verifyUser, deleteMaintenance)
 
 // Update maintenance status
 router.put("/status/:id", verifyUser, updateMaintenanceStatus)
-
-// Get maintenance stats
-router.get("/get/stats", verifyUser, getMaintenanceStats)
 
 export default router

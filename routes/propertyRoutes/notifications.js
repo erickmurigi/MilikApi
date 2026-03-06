@@ -19,6 +19,9 @@ router.post("/", verifyUser, createNotification)
 // Get all notifications
 router.get("/", verifyUser, getNotifications)
 
+// Get notification stats
+router.get("/get/stats", verifyUser, getNotificationStats)
+
 // Get single notification
 router.get("/:id", verifyUser, getNotification)
 
@@ -30,8 +33,5 @@ router.put("/read-all", verifyUser, markAllAsRead)
 
 // Delete notification
 router.delete("/:id", verifyUser, deleteNotification)
-
-// Get notification stats
-router.get("/get/stats", verifyUser, getNotificationStats)
 
 export default router

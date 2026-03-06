@@ -20,6 +20,9 @@ router.post("/", verifyUser, createLease)
 // Get all leases
 router.get("/", verifyUser, getLeases)
 
+// Get expiring leases
+router.get("/find/expiring", verifyUser, getExpiringLeases)
+
 // Get single lease
 router.get("/:id", verifyUser, getLease)
 
@@ -31,9 +34,6 @@ router.delete("/:id", verifyUser, deleteLease)
 
 // Sign lease
 router.put("/sign/:id", verifyUser, signLease)
-
-// Get expiring leases
-router.get("/find/expiring", verifyUser, getExpiringLeases)
 
 // Renew lease
 router.put("/renew/:id", verifyUser, renewLease)
