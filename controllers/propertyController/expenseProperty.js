@@ -18,8 +18,15 @@ export const createExpense = async(req, res, next) => {
 export const getExpenses = async(req, res, next) => {
     const { category, property, unit, startDate, endDate } = req.query;
     try {
-        // Security: Use authenticated user's company (system admins can query across companies)
-        const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
+        // Security: Use authenticated user's company, not client query
+        const business = req.user.company;
+        if (!business) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User must have a company context" 
+            });
+        }
+        
         const filter = { business };
         if (category) filter.category = category;
         if (property) filter.property = property;
@@ -81,8 +88,17 @@ export const deleteExpense = async(req, res, next) => {
 
 // Get expense summary
 export const getExpenseSummary = async(req, res, next) => {
-    const { business, startDate, endDate } = req.query;
+    const { startDate, endDate } = req.query;
     try {
+        // Security: Use authenticated user's company, not client query
+        const business = req.user.company;
+        if (!business) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User must have a company context" 
+            });
+        }
+        
         const match = { business };
         if (startDate || endDate) {
             match.date = {};

@@ -104,8 +104,17 @@ export const createUnit = async(req, res, next) => {
 
 // Get all units with utility calculations
 export const getUnits = async(req, res, next) => {
-    const { business, property, status } = req.query;
+    const { property, status } = req.query;
     try {
+        // Security: Use authenticated user's company, not client query
+        const business = req.user.company;
+        if (!business) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User must have a company context" 
+            });
+        }
+        
         const filter = { business };
         if (property) filter.property = property;
         if (status) filter.status = status;
@@ -315,8 +324,17 @@ export const updateUnitStatus = async(req, res, next) => {
 
 // Get available units
 export const getAvailableUnits = async(req, res, next) => {
-    const { business, property } = req.query;
+    const { property } = req.query;
     try {
+        // Security: Use authenticated user's company, not client query
+        const business = req.user.company;
+        if (!business) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User must have a company context" 
+            });
+        }
+        
         const filter = { 
             business, 
             status: 'vacant',

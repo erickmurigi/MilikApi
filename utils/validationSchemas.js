@@ -31,9 +31,9 @@ export const createPropertySchema = z.object({
     .enum(['active', 'inactive', 'Active', 'Inactive'])
     .transform((value) => value.toLowerCase())
     .default('active')
-});
+}).passthrough();
 
-export const updatePropertySchema = createPropertySchema.partial();
+export const updatePropertySchema = createPropertySchema.partial().passthrough();
 
 // ========== UNIT SCHEMAS ==========
 export const createUnitSchema = z.object({

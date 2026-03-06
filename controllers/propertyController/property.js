@@ -96,13 +96,24 @@ export const createProperty = async (req, res) => {
 
     // Filter and validate landlords - only include entries with name
     const validLandlords = (landlords || [])
-      .filter(landlord => landlord?.name?.trim())
+       .filter(landlord => {
+         const landlordName = landlord?.name?.trim() || landlord?.landlordName?.trim() || '';
+         return landlordName && landlordName.toLowerCase() !== 'default';
+       })
       .map((landlord, index) => ({
         landlordId: landlord.landlordId || null, // Store the Landlord ID if provided
-        name: landlord.name.trim(),
+         name: (landlord?.name || landlord?.landlordName || '').trim(),
         contact: landlord.contact?.trim() || '',
         isPrimary: index === 0
       }));
+
+    // Require at least one valid landlord
+    if (validLandlords.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one landlord is required. Please select a landlord from the list.'
+      });
+    }
 
     // Filter and validate standing charges - only include entries with serviceCharge
     const validStandingCharges = (standingCharges || [])
@@ -132,7 +143,7 @@ export const createProperty = async (req, res) => {
     const property = new Property({
       dateAcquired: dateAcquired ? new Date(dateAcquired) : null,
       letManage,
-      landlords: validLandlords.length > 0 ? validLandlords : [{ name: 'Default', contact: '', isPrimary: true }],
+      landlords: validLandlords, // validLandlords is guaranteed to have at least one entry
       propertyCode,
       propertyName,
       lrNumber,
@@ -352,6 +363,27 @@ export const updateProperty = async(req, res, next) => {
         req.body[field] = undefined;
       }
     });
+
+    // Validate landlords if being updated
+    if (req.body.landlords) {
+      const validLandlords = (req.body.landlords || [])
+        .filter(landlord => landlord?.name?.trim() && landlord.name.trim().toLowerCase() !== 'default')
+        .map((landlord, index) => ({
+          landlordId: landlord.landlordId || null,
+          name: landlord.name.trim(),
+          contact: landlord.contact?.trim() || '',
+          isPrimary: index === 0
+        }));
+
+      if (validLandlords.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'At least one valid landlord is required. Please select a landlord from the list.'
+        });
+      }
+
+      req.body.landlords = validLandlords;
+    }
     
     // Update property
     Object.keys(req.body).forEach(key => {

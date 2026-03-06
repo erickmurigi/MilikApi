@@ -9,16 +9,18 @@ import ExpenseProperty from "../../models/Expense.js";
 import Lease from "../../models/Lease.js";
 import Landlord from "../../models/Landlord.js";
 import Utility from "../../models/Utility.js";
+import { verifyUser } from "../verifyToken.js";
 
 const router = express.Router();
 
 // Get dashboard summary
-router.get("/summary", async (req, res) => {
+router.get("/summary", verifyUser, async (req, res) => {
   try {
-    const { business } = req.query;
+    // Security: Use authenticated user's company, not client query (prevents cross-tenant exposure)
+    const business = req.user.company;
     
     if (!business) {
-      return res.status(400).json({ message: "Business ID is required" });
+      return res.status(400).json({ message: "User must have a company context" });
     }
 
     const [

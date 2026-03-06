@@ -117,15 +117,30 @@ export const getLandlords = async(req, res, next) => {
         const landlordsWithCounts = await Promise.all(
             landlords.map(async (landlord) => {
                 // Count ACTIVE properties for this landlord
+                // Handle both new way (with landlordId) and old way (name matching)
                 const activeProperties = await Property.countDocuments({
-                    'landlords.landlordId': landlord._id,
-                    status: { $ne: 'archived' }
+                    $and: [
+                        {
+                            $or: [
+                                { 'landlords.landlordId': landlord._id },
+                                { 'landlords.name': landlord.landlordName }
+                            ]
+                        },
+                        { status: { $ne: 'archived' } }
+                    ]
                 });
                 
-                // Count ARCHIVED properties for this landlord  
+                // Count ARCHIVED properties for this landlord
                 const archivedProperties = await Property.countDocuments({
-                    'landlords.landlordId': landlord._id,
-                    status: 'archived'
+                    $and: [
+                        {
+                            $or: [
+                                { 'landlords.landlordId': landlord._id },
+                                { 'landlords.name': landlord.landlordName }
+                            ]
+                        },
+                        { status: 'archived' }
+                    ]
                 });
                 
                 return {
@@ -225,8 +240,24 @@ export const updateLandlord = async(req, res, next) => {
 // Delete landlord
 export const deleteLandlord = async(req, res, next) => {
     try {
-        // Check if landlord has properties
-        const properties = await Property.countDocuments({ 'landlords.landlordId': req.params.id });
+        const landlordId = req.params.id;
+        const landlord = await Landlord.findById(landlordId);
+        
+        if (!landlord) {
+            return res.status(404).json({
+                success: false,
+                message: "Landlord not found"
+            });
+        }
+        
+        // Check if landlord has properties (both by ID and name for backward compatibility)
+        const properties = await Property.countDocuments({
+            $or: [
+                { 'landlords.landlordId': landlordId },
+                { 'landlords.name': landlord.landlordName }
+            ]
+        });
+        
         if (properties > 0) {
             return res.status(400).json({ 
                 success: false,
@@ -262,9 +293,22 @@ export const deleteLandlord = async(req, res, next) => {
 export const getLandlordStats = async(req, res, next) => {
     try {
         const landlordId = req.params.id;
+        const landlord = await Landlord.findById(landlordId);
         
-        // Get all properties for this landlord
-        const properties = await Property.find({ 'landlords.landlordId': landlordId });
+        if (!landlord) {
+            return res.status(404).json({
+                success: false,
+                message: "Landlord not found"
+            });
+        }
+        
+        // Get all properties for this landlord (both by ID and name for backward compatibility)
+        const properties = await Property.find({
+            $or: [
+                { 'landlords.landlordId': landlordId },
+                { 'landlords.name': landlord.landlordName }
+            ]
+        });
         const propertyIds = properties.map(p => p._id);
         
         // Count total properties (active + archived)
@@ -272,12 +316,27 @@ export const getLandlordStats = async(req, res, next) => {
         
         // Count active vs archived
         const activeProperties = await Property.countDocuments({
-            'landlords.landlordId': landlordId,
-            status: { $ne: 'archived' }
+            $and: [
+                {
+                    $or: [
+                        { 'landlords.landlordId': landlordId },
+                        { 'landlords.name': landlord.landlordName }
+                    ]
+                },
+                { status: { $ne: 'archived' } }
+            ]
         });
+        
         const archivedProperties = await Property.countDocuments({
-            'landlords.landlordId': landlordId,
-            status: 'archived'
+            $and: [
+                {
+                    $or: [
+                        { 'landlords.landlordId': landlordId },
+                        { 'landlords.name': landlord.landlordName }
+                    ]
+                },
+                { status: 'archived' }
+            ]
         });
         
         // Count units across all properties

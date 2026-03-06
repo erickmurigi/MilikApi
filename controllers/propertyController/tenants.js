@@ -105,7 +105,14 @@ export const getTenant = async (req, res, next) => {
         const tenant = await Tenant.findById(req.params.id)
             .populate('unit', 'unitNumber property rent amenities status utilities')
             .populate('unit.property', 'name address propertyName propertyType');
+        
         if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+        
+        // Security: Verify tenant belongs to authenticated user's company
+        if (tenant.business && tenant.business.toString() !== req.user.company?.toString()) {
+            return res.status(403).json({ message: "Not authorized to access this tenant" });
+        }
+        
         res.status(200).json(tenant);
     } catch (err) {
         next(err);
@@ -115,6 +122,15 @@ export const getTenant = async (req, res, next) => {
 // Update tenant
 export const updateTenant = async (req, res, next) => {
     try {
+        const tenant = await Tenant.findById(req.params.id);
+        
+        if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+        
+        // Security: Verify tenant belongs to authenticated user's company
+        if (tenant.business && tenant.business.toString() !== req.user.company?.toString()) {
+            return res.status(403).json({ message: "Not authorized to update this tenant" });
+        }
+        
         const updatedTenant = await Tenant.findByIdAndUpdate(
             req.params.id,
             { $set: req.body },
@@ -131,6 +147,16 @@ export const deleteTenant = async (req, res, next) => {
     try {
         const tenant = await Tenant.findById(req.params.id);
         if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+        // Check if tenant has any rent payments/transactions
+        const paymentCount = await RentPayment.countDocuments({ tenant: req.params.id });
+        
+        if (paymentCount > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete tenant with ${paymentCount} existing transaction(s). Please archive the tenant instead.`
+            });
+        }
 
         if (tenant.unit) {
             // Get the unit and its property

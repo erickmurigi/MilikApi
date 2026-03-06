@@ -31,9 +31,9 @@ router.put("/:id", verifyUser, validateRequest(updatePropertySchema), updateProp
 router.delete("/:id", verifyUser, deleteProperty)
 
 // Get property units
-router.get("/units/:id",getPropertyUnits)
+router.get("/units/:id", verifyUser, getPropertyUnits)
 
 // Get property tenants
-router.get("/tenants/:id",  getPropertyTenants)
+router.get("/tenants/:id", verifyUser, getPropertyTenants)
 
 export default router

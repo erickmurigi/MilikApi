@@ -7,6 +7,7 @@ import {
   updatePayment, 
   deletePayment,
   confirmPayment,
+  unconfirmPayment,
   getPaymentSummary 
 } from "../../controllers/propertyController/rentPayment.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
@@ -30,6 +31,9 @@ router.delete("/:id", verifyUser, deletePayment)
 
 // Confirm payment
 router.put("/confirm/:id", verifyUser, confirmPayment)
+
+// Unconfirm payment - allows unconfirming to enable deletion
+router.put("/unconfirm/:id", verifyUser, unconfirmPayment)
 
 // Get payment summary
 router.get("/get/summary", verifyUser, getPaymentSummary)

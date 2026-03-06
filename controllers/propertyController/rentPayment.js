@@ -5,29 +5,27 @@ import Unit from "../../models/Unit.js";
 import { emitToCompany } from "../../utils/socketManager.js";
 
 
-// Generate unique receipt number
+// Generate unique sequential receipt number
 const generateReceiptNumber = async (businessId) => {
-  const prefix = "RCPT";
-  const year = new Date().getFullYear().toString().slice(-2);
-  const month = (new Date().getMonth() + 1).toString().padStart(2, '0');
+  const prefix = "REC";
   
-  // Find the last receipt number for this business
+  // Find the highest receipt number for this business
   const lastPayment = await RentPayment.findOne(
     { 
       business: businessId,
-      receiptNumber: { $regex: `^${prefix}-${year}${month}` }
+      receiptNumber: { $regex: `^${prefix}\\d+$` }
     },
     { receiptNumber: 1 },
-    { sort: { receiptNumber: -1 } }
+    { sort: { createdAt: -1 } }
   );
   
   let sequence = 1;
   if (lastPayment && lastPayment.receiptNumber) {
-    const lastSeq = parseInt(lastPayment.receiptNumber.split('-')[2]) || 0;
-    sequence = lastSeq + 1;
+    const numericPart = parseInt(lastPayment.receiptNumber.replace(`${prefix}`, '')) || 0;
+    sequence = numericPart + 1;
   }
   
-  return `${prefix}-${year}${month}-${sequence.toString().padStart(4, '0')}`;
+  return `${prefix}${sequence.toString().padStart(5, '0')}`;
 };
 
 // Create payment
@@ -155,13 +153,67 @@ export const confirmPayment = async(req, res, next) => {
     }
 }
 
+// Unconfirm payment - allows unconfirming a confirmed receipt to delete it
+export const unconfirmPayment = async(req, res, next) => {
+    try {
+        const payment = await RentPayment.findById(req.params.id);
+        if (!payment) return res.status(404).json({ message: "Payment not found" });
+        
+        if (!payment.isConfirmed) {
+            return res.status(400).json({
+                success: false,
+                message: "This payment is not confirmed. Cannot unconfirm an unconfirmed payment."
+            });
+        }
+        
+        const updatedPayment = await RentPayment.findByIdAndUpdate(
+            req.params.id,
+            { 
+                $set: { 
+                    isConfirmed: false,
+                    confirmedBy: null,
+                    confirmedAt: null
+                }
+            },
+            { new: true }
+        );
+        
+        // Update tenant balance
+        await updateTenantBalance(updatedPayment);
+        
+        res.status(200).json({
+            success: true,
+            message: "Payment unconfirmed successfully. You can now delete this receipt.",
+            data: updatedPayment
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
 // Delete payment
 export const deletePayment = async(req, res, next) => {
     try {
         const payment = await RentPayment.findById(req.params.id);
         if (!payment) return res.status(404).json({ message: "Payment not found" });
         
-        // If payment was confirmed, reverse the tenant balance
+        // Prevent deletion of confirmed payments/receipts
+        if (payment.isConfirmed) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot delete a confirmed payment/receipt. Please unconfirm it first or contact support."
+            });
+        }
+        
+        // Prevent deletion of receipts with receipt numbers
+        if (payment.receiptNumber) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot delete a payment with a receipt number. Receipts are permanent records."
+            });
+        }
+        
+        // Legacy code (should not reach here if payment is confirmed)
         if (payment.isConfirmed) {
             const tenant = await Tenant.findById(payment.tenant);
             if (tenant) {

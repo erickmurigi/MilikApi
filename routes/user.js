@@ -1,13 +1,14 @@
 import express from 'express';
 import User from '../models/User.js';
 import Company from '../models/Company.js';
+import { verifyUser } from '../controllers/verifyToken.js';
 
 const router = express.Router();
 
 // Apply authentication to all user routes
 
 // ------------------- GET all users for a company -------------------
-router.get('/', async (req, res) => {
+router.get('/', verifyUser, async (req, res) => {
   try {
     const { companyId, page = 1, limit = 10, search } = req.query;
     
@@ -48,7 +49,7 @@ router.get('/', async (req, res) => {
 });
 
 // ------------------- GET single user by ID -------------------
-router.get('/:id', async (req, res) => {
+router.get('/:id', verifyUser, async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('-password -resetPasswordToken -resetPasswordExpire');
     if (!user) {
@@ -62,7 +63,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // ------------------- CREATE new user -------------------
-router.post('/', async (req, res) => {
+router.post('/', verifyUser, async (req, res) => {
   try {
     const { company, email, ...otherData } = req.body;
 
@@ -98,7 +99,7 @@ router.post('/', async (req, res) => {
 });
 
 // ------------------- UPDATE user -------------------
-router.put('/:id', async (req, res) => {
+router.put('/:id', verifyUser, async (req, res) => {
   try {
     // Prevent updating password via this endpoint (use separate password reset)
     if (req.body.password) {
@@ -125,7 +126,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // ------------------- DELETE user -------------------
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', verifyUser, async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) {
@@ -138,7 +139,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // ------------------- Toggle lock status -------------------
-router.patch('/:id/toggle-lock', async (req, res) => {
+router.patch('/:id/toggle-lock', verifyUser, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) {

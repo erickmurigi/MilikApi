@@ -57,10 +57,10 @@ export const createCompany = async (req, res, next) => {
       fiscalStartYear: fiscalStartYear || new Date().getFullYear(),
       companyCode,
       modules: {
-        propertyManagement: modules.propertyManagement || true,
-        inventory: modules.inventory || false,
-        accounts: modules.accounts || true,
-        billing: modules.billing || true,
+        propertyManagement: modules.propertyManagement !== undefined ? modules.propertyManagement : true,
+        inventory: modules.inventory !== undefined ? modules.inventory : false,
+        accounts: modules.accounts !== undefined ? modules.accounts : true,
+        billing: modules.billing !== undefined ? modules.billing : true,
         ...modules
       }
     });

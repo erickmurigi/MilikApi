@@ -56,7 +56,7 @@ const startServer = async () => {
 const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:5174",
-    "https://milik-system.vercel.app/",
+    "https://milik-system.vercel.app",
     "https://milik.com",
     
 ];
@@ -166,8 +166,6 @@ setIO(io);
 // Middleware
 app.use(helmet());
 app.use(morgan("common"));
-
-app.use(express.json());
 
 // Rate limiting configuration
 const authLimiter = rateLimit({
