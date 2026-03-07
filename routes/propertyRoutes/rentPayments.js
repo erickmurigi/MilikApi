@@ -8,6 +8,8 @@ import {
   deletePayment,
   confirmPayment,
   unconfirmPayment,
+  reversePayment,
+  cancelReversal,
   getPaymentSummary 
 } from "../../controllers/propertyController/rentPayment.js"
 import { verifyUser } from "../../controllers/verifyToken.js"
@@ -37,5 +39,11 @@ router.put("/confirm/:id", verifyUser, confirmPayment)
 
 // Unconfirm payment - allows unconfirming to enable deletion
 router.put("/unconfirm/:id", verifyUser, unconfirmPayment)
+
+// Reverse payment/receipt (audit-safe alternative to delete)
+router.put("/reverse/:id", verifyUser, reversePayment)
+
+// Cancel a reversal and restore original receipt allocation
+router.put("/reverse/cancel/:id", verifyUser, cancelReversal)
 
 export default router

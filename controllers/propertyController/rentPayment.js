@@ -35,7 +35,7 @@ export const createPayment = async (req, res, next) => {
         const businessId = req.user.company;
         
         // Generate reference number
-        const refNumber = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const refNumber = req.body?.referenceNumber?.trim() || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         
         // Generate receipt number if not provided
         let receiptNumber = req.body.receiptNumber;
@@ -47,6 +47,8 @@ export const createPayment = async (req, res, next) => {
             ...req.body,
             referenceNumber: refNumber,
             receiptNumber: receiptNumber,
+            bankingDate: req.body?.bankingDate || req.body?.paymentDate,
+            recordDate: req.body?.recordDate || new Date(),
             business: businessId
         });
         
@@ -68,7 +70,7 @@ export const createPayment = async (req, res, next) => {
 
 // Get all payments
 export const getPayments = async(req, res, next) => {
-    const { tenant, unit, month, year, paymentType } = req.query;
+    const { tenant, unit, month, year, paymentType, ledger } = req.query;
     try {
         // Security: Use authenticated user's company (system admins can query across companies)
         const business = req.user.isSystemAdmin && req.query.business ? req.query.business : req.user.company;
@@ -78,10 +80,11 @@ export const getPayments = async(req, res, next) => {
         if (month) filter.month = parseInt(month);
         if (year) filter.year = parseInt(year);
         if (paymentType) filter.paymentType = paymentType;
+        if (ledger) filter.ledgerType = ledger;
         
         const payments = await RentPayment.find(filter)
             .populate('tenant', 'name email phone')
-            .populate('unit', 'unitNumber')
+            .populate('unit', 'unitNumber property')
             .populate('confirmedBy', 'surname otherNames email')
             .sort({ paymentDate: -1 });
         res.status(200).json(payments);
@@ -284,5 +287,176 @@ const updateTenantBalance = async(payment) => {
             tenant.status = 'active';
         }
         await tenant.save();
+    }
+}
+
+// Reverse confirmed payment/receipt (audit-safe alternative to delete)
+export const reversePayment = async(req, res, next) => {
+    try {
+        const payment = await RentPayment.findById(req.params.id);
+        if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+        if (!payment.isConfirmed) {
+            return res.status(400).json({
+                success: false,
+                message: "Only confirmed receipts can be reversed"
+            });
+        }
+
+        if (payment.isReversed) {
+            return res.status(400).json({
+                success: false,
+                message: "Receipt is already reversed"
+            });
+        }
+
+        const reason = req.body?.reason || "Receipt reversed";
+        const businessId = payment.business || req.user.company;
+        const reversedBy = req.user?._id || req.user?.id || null;
+
+        const reversalReceiptNumber = await generateReceiptNumber(businessId);
+        const reversalRef = `REV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+        const reversalPayload = {
+            tenant: payment.tenant,
+            unit: payment.unit,
+            amount: -(Math.abs(payment.amount || 0)),
+            paymentType: payment.paymentType,
+            paymentDate: new Date(),
+            bankingDate: new Date(),
+            recordDate: new Date(),
+            dueDate: payment.dueDate || new Date(),
+            referenceNumber: reversalRef,
+            description: `Reversal of ${payment.receiptNumber || payment.referenceNumber}. ${reason}`,
+            isConfirmed: true,
+            confirmedBy: reversedBy,
+            confirmedAt: new Date(),
+            paymentMethod: payment.paymentMethod,
+            receiptNumber: reversalReceiptNumber,
+            month: new Date().getMonth() + 1,
+            year: new Date().getFullYear(),
+            business: businessId,
+            ledgerType: 'cashbook',
+            reversalOf: payment._id
+        };
+
+        const reversalEntry = await new RentPayment(reversalPayload).save();
+
+        payment.isReversed = true;
+        payment.reversedAt = new Date();
+        payment.reversedBy = reversedBy;
+        payment.reversalReason = reason;
+        payment.reversalEntry = reversalEntry._id;
+        await payment.save();
+
+        // Apply tenant balance update through existing helper (negative amount adds balance back)
+        await updateTenantBalance(reversalEntry);
+
+        emitToCompany(businessId, 'payment:reversed', {
+            paymentId: payment._id,
+            reversalId: reversalEntry._id
+        });
+
+        const populatedOriginal = await RentPayment.findById(payment._id)
+            .populate('tenant', 'name email phone')
+            .populate('unit', 'unitNumber')
+            .populate('reversalEntry');
+
+        res.status(200).json({
+            success: true,
+            message: 'Receipt reversed successfully',
+            data: {
+                original: populatedOriginal,
+                reversal: reversalEntry
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+// Cancel a previous reversal and restore original receipt allocation effect
+export const cancelReversal = async(req, res, next) => {
+    try {
+        const payment = await RentPayment.findById(req.params.id);
+        if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+        if (!payment.isReversed || !payment.reversalEntry) {
+            return res.status(400).json({
+                success: false,
+                message: "Receipt does not have an active reversal"
+            });
+        }
+
+        const reversalEntry = await RentPayment.findById(payment.reversalEntry);
+        if (!reversalEntry) {
+            return res.status(404).json({
+                success: false,
+                message: "Reversal entry not found"
+            });
+        }
+
+        if (reversalEntry.isCancelled) {
+            return res.status(400).json({
+                success: false,
+                message: "Reversal is already cancelled"
+            });
+        }
+
+        const businessId = payment.business || req.user.company;
+        const cancelledBy = req.user?._id || req.user?.id || null;
+        const reason = req.body?.reason || "Reversal cancelled; allocation restored";
+        const wasConfirmed = reversalEntry.isConfirmed === true;
+
+        reversalEntry.isCancelled = true;
+        reversalEntry.cancelledAt = new Date();
+        reversalEntry.cancelledBy = cancelledBy;
+        reversalEntry.cancellationReason = reason;
+        reversalEntry.isCancellationEntry = true;
+        reversalEntry.isConfirmed = false;
+        reversalEntry.confirmedAt = null;
+        reversalEntry.confirmedBy = null;
+        await reversalEntry.save();
+
+        payment.isReversed = false;
+        payment.reversedAt = null;
+        payment.reversedBy = null;
+        payment.reversalReason = null;
+        payment.reversalEntry = null;
+        await payment.save();
+
+        // Remove reversal's impact from balance/allocation logic by applying a positive amount back
+        if (wasConfirmed) {
+            await updateTenantBalance({
+                isConfirmed: true,
+                paymentType: reversalEntry.paymentType,
+                tenant: reversalEntry.tenant,
+                amount: Math.abs(Number(reversalEntry.amount || 0))
+            });
+        }
+
+        emitToCompany(businessId, 'payment:reversal_cancelled', {
+            paymentId: payment._id,
+            reversalId: reversalEntry._id
+        });
+
+        const populatedOriginal = await RentPayment.findById(payment._id)
+            .populate('tenant', 'name email phone')
+            .populate('unit', 'unitNumber');
+
+        const populatedReversal = await RentPayment.findById(reversalEntry._id)
+            .populate('tenant', 'name email phone')
+            .populate('unit', 'unitNumber');
+
+        res.status(200).json({
+            success: true,
+            message: 'Reversal cancelled successfully. Receipt allocation restored.',
+            data: {
+                original: populatedOriginal,
+                reversal: populatedReversal
+            }
+        });
+    } catch (err) {
+        next(err);
     }
 }

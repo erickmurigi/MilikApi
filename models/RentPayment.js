@@ -20,6 +20,8 @@ const RentPaymentSchema = new mongoose.Schema(
       required: true 
     },
     paymentDate: { type: Date, required: true },
+    bankingDate: { type: Date },
+    recordDate: { type: Date },
     dueDate: { type: Date, required: true },
     referenceNumber: { type: String, required: true, unique: true },
     description: { type: String },
@@ -31,6 +33,22 @@ const RentPaymentSchema = new mongoose.Schema(
       enum: ['bank_transfer', 'mobile_money', 'cash', 'check', 'credit_card'],
       required: true 
     },
+    ledgerType: {
+      type: String,
+      enum: ['invoices', 'receipts', 'cashbook'],
+      default: 'receipts'
+    },
+    isReversed: { type: Boolean, default: false },
+    reversedAt: { type: Date },
+    reversedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reversalReason: { type: String },
+    reversalEntry: { type: mongoose.Schema.Types.ObjectId, ref: 'RentPayment' },
+    reversalOf: { type: mongoose.Schema.Types.ObjectId, ref: 'RentPayment' },
+    isCancellationEntry: { type: Boolean, default: false },
+    isCancelled: { type: Boolean, default: false },
+    cancelledAt: { type: Date },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    cancellationReason: { type: String },
     receiptNumber: { 
       type: String, 
       unique: true, 
@@ -86,5 +104,10 @@ RentPaymentSchema.index({ paymentDate: -1 });
 RentPaymentSchema.index({ referenceNumber: 1 }, { unique: true });
 RentPaymentSchema.index({ receiptNumber: 1 }, { unique: true, sparse: true });
 RentPaymentSchema.index({ year: -1, month: -1 });
+RentPaymentSchema.index({ ledgerType: 1 });
+RentPaymentSchema.index({ reversalOf: 1 });
+RentPaymentSchema.index({ isCancelled: 1 });
+RentPaymentSchema.index({ bankingDate: -1 });
+RentPaymentSchema.index({ recordDate: -1 });
 
 export default mongoose.model("RentPayment", RentPaymentSchema);

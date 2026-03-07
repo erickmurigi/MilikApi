@@ -25,6 +25,11 @@ const TenantSchema = new mongoose.Schema(
       enum: ['bank_transfer', 'mobile_money', 'cash', 'check', 'credit_card'],
       required: true 
     },
+    leaseType: {
+      type: String,
+      enum: ['at_will', 'fixed'],
+      default: 'at_will'
+    },
     moveInDate: { type: Date, required: true },
     moveOutDate: { type: Date },
     emergencyContact: {

@@ -7,6 +7,23 @@ import RentPayment from "../../models/RentPayment.js";
 // Create tenant
 export const createTenant = async (req, res, next) => {
     try {
+        const leaseType = String(req.body.leaseType || 'at_will').toLowerCase();
+        if (!['at_will', 'fixed'].includes(leaseType)) {
+            return res.status(400).json({ message: 'Invalid lease type. Use at_will or fixed' });
+        }
+
+        if (leaseType === 'fixed') {
+            if (!req.body.moveOutDate) {
+                return res.status(400).json({ message: 'Move-out date is required for fixed leases' });
+            }
+
+            const moveInDate = new Date(req.body.moveInDate);
+            const moveOutDate = new Date(req.body.moveOutDate);
+            if (Number.isNaN(moveInDate.getTime()) || Number.isNaN(moveOutDate.getTime()) || moveOutDate <= moveInDate) {
+                return res.status(400).json({ message: 'Move-out date must be after move-in date for fixed leases' });
+            }
+        }
+
         // Check if unit is available
         const unit = await Unit.findById(req.body.unit);
         if (!unit) {
@@ -45,6 +62,8 @@ export const createTenant = async (req, res, next) => {
         // Security: Use authenticated user's company, not client-provided business
         const newTenant = new Tenant({ 
             ...req.body, 
+            leaseType,
+            moveOutDate: leaseType === 'fixed' ? req.body.moveOutDate : null,
             tenantCode,
             business: req.user.company 
         });
@@ -495,6 +514,57 @@ export const bulkImportTenants = async (req, res, next) => {
                     continue;
                 }
 
+                // Validate lease type + dates
+                const leaseType = String(record.leaseType || 'at_will').toLowerCase();
+                if (!['at_will', 'fixed'].includes(leaseType)) {
+                    const error = `Invalid lease type: ${record.leaseType}. Must be at_will or fixed`;
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                const moveInDate = record.moveInDate ? new Date(record.moveInDate) : null;
+                const moveOutDate = record.moveOutDate ? new Date(record.moveOutDate) : null;
+
+                if (!moveInDate || Number.isNaN(moveInDate.getTime())) {
+                    const error = `Invalid move-in date for tenant ${record.tenantName}`;
+                    console.log(`  ❌ ${error}`);
+                    failed.push({
+                        tenantName: record.tenantName,
+                        error,
+                        row: rowIndex
+                    });
+                    continue;
+                }
+
+                if (leaseType === 'fixed') {
+                    if (!moveOutDate || Number.isNaN(moveOutDate.getTime())) {
+                        const error = `Move-out date is required for fixed lease type`;
+                        console.log(`  ❌ ${error}`);
+                        failed.push({
+                            tenantName: record.tenantName,
+                            error,
+                            row: rowIndex
+                        });
+                        continue;
+                    }
+
+                    if (moveOutDate <= moveInDate) {
+                        const error = `Move-out date must be after move-in date for fixed lease type`;
+                        console.log(`  ❌ ${error}`);
+                        failed.push({
+                            tenantName: record.tenantName,
+                            error,
+                            row: rowIndex
+                        });
+                        continue;
+                    }
+                }
+
                 // Generate tenant code if needed
                 let tenantCode = record.tenantCode;
                 if (!tenantCode || tenantCode.trim() === '') {
@@ -526,8 +596,9 @@ export const bulkImportTenants = async (req, res, next) => {
                     balance: 0,
                     status: record.status || 'active',
                     paymentMethod: record.paymentMethod || 'bank_transfer',
-                    moveInDate: new Date(record.moveInDate),
-                    moveOutDate: record.moveOutDate ? new Date(record.moveOutDate) : null,
+                    leaseType,
+                    moveInDate,
+                    moveOutDate: leaseType === 'fixed' ? moveOutDate : null,
                     tenantCode,
                     business,
                     emergencyContact: {
