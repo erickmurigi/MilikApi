@@ -41,10 +41,6 @@ const CompanySettingsSchema = new mongoose.Schema(
         description: { type: String, default: "" },
         percentage: { type: Number, required: true }, // 0-100
         applicableTo: { type: String, enum: ["rent", "utilities", "all"], default: "rent" },
-        recognitionBasis: { type: String, enum: ["received", "invoiced"], default: "received" },
-        settlementBasis: { type: String, enum: ["received", "invoiced"], default: "received" },
-        includeDirectLandlordPayments: { type: Boolean, default: true },
-        provisionalRecognition: { type: Boolean, default: false },
         isActive: { type: Boolean, default: true },
         createdAt: { type: Date, default: Date.now },
       },

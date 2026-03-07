@@ -3,6 +3,9 @@
 .env.local
 .env.production
 .env.staging
+.env.*
+!.env.example
+!.env.sample
 
 # Dependencies
 node_modules/
@@ -30,6 +33,12 @@ coverage/
 dist/
 build/
 
+# Local uploads and generated files
+uploads/
+tmp/
+temp/
+*.tmp
+
 # IDEs
 .vscode/
 .idea/
@@ -40,11 +49,22 @@ build/
 
 # OS Files
 Thumbs.db
+Desktop.ini
 
-# Temporary files
-tmp/
-temp/
-*.tmp
+# Security-sensitive files
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+
+# Database dumps/backups
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+*.bak
 
 # Testing
 .jest-cache/

@@ -198,6 +198,29 @@ const PropertySchema = new mongoose.Schema(
       required: true 
     },
     
+    // Commission & Payment Settings
+    commissionPercentage: { 
+      type: Number, 
+      default: 0,
+      min: 0,
+      max: 100
+    },
+    commissionRecognitionBasis: { 
+      type: String, 
+      enum: ['invoiced', 'received'],
+      default: 'received'
+    },
+    tenantsPaysTo: { 
+      type: String, 
+      enum: ['propertyManager', 'landlord'],
+      default: 'propertyManager'
+    },
+    depositHeldBy: { 
+      type: String, 
+      enum: ['propertyManager', 'landlord'],
+      default: 'propertyManager'
+    },
+    
     // Audit fields
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
