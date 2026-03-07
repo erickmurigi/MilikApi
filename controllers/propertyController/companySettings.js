@@ -205,7 +205,16 @@ export const deleteBillingPeriod = async (req, res, next) => {
 export const addCommission = async (req, res, next) => {
   try {
     const { businessId } = req.params;
-    const { name, percentage, applicableTo, description } = req.body;
+    const {
+      name,
+      percentage,
+      applicableTo,
+      description,
+      recognitionBasis,
+      settlementBasis,
+      includeDirectLandlordPayments,
+      provisionalRecognition,
+    } = req.body;
 
     if (!name || percentage === undefined) {
       return res.status(400).json({ message: "Name and percentage are required" });
@@ -221,6 +230,10 @@ export const addCommission = async (req, res, next) => {
       name,
       percentage,
       applicableTo: applicableTo || "rent",
+      recognitionBasis: recognitionBasis || "received",
+      settlementBasis: settlementBasis || "received",
+      includeDirectLandlordPayments: includeDirectLandlordPayments !== false,
+      provisionalRecognition: Boolean(provisionalRecognition),
       description: description || "",
       isActive: true,
     };
@@ -238,7 +251,17 @@ export const addCommission = async (req, res, next) => {
 export const updateCommission = async (req, res, next) => {
   try {
     const { businessId, commissionId } = req.params;
-    const { name, percentage, applicableTo, description, isActive } = req.body;
+    const {
+      name,
+      percentage,
+      applicableTo,
+      description,
+      isActive,
+      recognitionBasis,
+      settlementBasis,
+      includeDirectLandlordPayments,
+      provisionalRecognition,
+    } = req.body;
 
     const settings = await CompanySettings.findOne({ company: businessId });
     if (!settings) {
@@ -253,6 +276,14 @@ export const updateCommission = async (req, res, next) => {
     if (name) commission.name = name;
     if (percentage !== undefined) commission.percentage = percentage;
     if (applicableTo) commission.applicableTo = applicableTo;
+    if (recognitionBasis) commission.recognitionBasis = recognitionBasis;
+    if (settlementBasis) commission.settlementBasis = settlementBasis;
+    if (includeDirectLandlordPayments !== undefined) {
+      commission.includeDirectLandlordPayments = includeDirectLandlordPayments;
+    }
+    if (provisionalRecognition !== undefined) {
+      commission.provisionalRecognition = provisionalRecognition;
+    }
     if (description !== undefined) commission.description = description;
     if (isActive !== undefined) commission.isActive = isActive;
 

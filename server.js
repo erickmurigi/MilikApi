@@ -31,6 +31,7 @@ import maintenanceRoutes from "./routes/propertyRoutes/maintenance.js"
 import leaseRoutes from "./routes/propertyRoutes/leases.js"
 import expensePropertyRoutes from "./routes/propertyRoutes/expensesProperties.js"
 import notificationRoutes from "./routes/propertyRoutes/notifications.js"
+import paymentVoucherRoutes from "./routes/propertyRoutes/paymentVouchers.js"
 import DashboardRoutes from "./controllers/propertyController/dashboard.js"
 import companyRoutes from "./routes/companies.js";
 import companySettingsRoutes from "./routes/companySettings.js";
@@ -224,6 +225,7 @@ app.get('/api', (req, res) => {
       maintenance: '/api/maintenances',
       expenses: '/api/propertyexpenses',
       utilities: '/api/utilities',
+      paymentVouchers: '/api/payment-vouchers',
       notifications: '/api/notifications',
       dashboard: '/api/dashboard'
     },
@@ -249,6 +251,7 @@ app.use("/api/rent-payments", rentPaymentRoutes)
 app.use("/api/maintenances", maintenanceRoutes)
 app.use("/api/leases", leaseRoutes)
 app.use("/api/propertyexpenses", expensePropertyRoutes)
+app.use("/api/payment-vouchers", paymentVoucherRoutes)
 app.use("/api/notifications", notificationRoutes)
 app.use("/api/dashboard", DashboardRoutes)
 app.use('/api/companies', companyRoutes);
