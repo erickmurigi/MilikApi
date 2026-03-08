@@ -207,7 +207,7 @@ const PropertySchema = new mongoose.Schema(
     },
     commissionRecognitionBasis: { 
       type: String, 
-      enum: ['invoiced', 'received'],
+      enum: ['invoiced', 'received', 'received_manager_only'],
       default: 'received'
     },
     tenantsPaysTo: { 

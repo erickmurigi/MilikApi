@@ -2,7 +2,10 @@
 import RentPayment from "../../models/RentPayment.js";
 import Tenant from "../../models/Tenant.js";
 import Unit from "../../models/Unit.js";
+import Property from "../../models/Property.js";
 import { emitToCompany } from "../../utils/socketManager.js";
+import { postEntry, postReversal } from "../../services/ledgerPostingService.js";
+import FinancialLedgerEntry from "../../models/FinancialLedgerEntry.js";
 
 
 // Generate unique sequential receipt number
@@ -26,6 +29,140 @@ const generateReceiptNumber = async (businessId) => {
   }
   
   return `${prefix}${sequence.toString().padStart(5, '0')}`;
+};
+
+const getStatementPeriodFromPayment = (payment) => {
+    const paymentDate = payment?.paymentDate ? new Date(payment.paymentDate) : new Date();
+    const fallbackMonth = paymentDate.getMonth() + 1;
+    const fallbackYear = paymentDate.getFullYear();
+
+    const month = Number(payment?.month || fallbackMonth);
+    const year = Number(payment?.year || fallbackYear);
+
+    const start = new Date(year, Math.max(month - 1, 0), 1, 0, 0, 0, 0);
+    const end = new Date(year, Math.max(month, 1), 0, 23, 59, 59, 999);
+    return { start, end };
+};
+
+const resolveLedgerCategory = (payment) => {
+    if (payment?.paymentType !== "rent") return null;
+    const paidDirect = !!payment?.paidDirectToLandlord;
+    return paidDirect ? "RENT_RECEIPT_LANDLORD" : "RENT_RECEIPT_MANAGER";
+};
+
+const resolveLedgerReceiver = (payment) => {
+    return payment?.paidDirectToLandlord ? "landlord" : "manager";
+};
+
+const resolvePropertyAndLandlord = async (payment) => {
+    const unit = await Unit.findById(payment.unit).select("property").lean();
+    if (!unit?.property) return { propertyId: null, landlordId: null };
+
+    const property = await Property.findById(unit.property).select("landlords").lean();
+    if (!property) return { propertyId: unit.property, landlordId: null };
+
+    const landlords = Array.isArray(property.landlords) ? property.landlords : [];
+    const primary = landlords.find((item) => item?.isPrimary && item?.landlordId);
+    const fallback = landlords.find((item) => item?.landlordId);
+    const landlordId = primary?.landlordId || fallback?.landlordId || null;
+
+    return {
+        propertyId: unit.property,
+        landlordId,
+    };
+};
+
+const tryPostPaymentLedgerEntry = async (payment, userId) => {
+    const category = resolveLedgerCategory(payment);
+    if (!category) return null;
+
+    const { propertyId, landlordId } = await resolvePropertyAndLandlord(payment);
+    if (!propertyId || !landlordId) {
+        console.warn("Skipping ledger post: missing property/landlord context", {
+            paymentId: String(payment?._id || ""),
+            propertyId,
+            landlordId,
+        });
+        return null;
+    }
+
+    const { start, end } = getStatementPeriodFromPayment(payment);
+    const txDate = payment?.paymentDate ? new Date(payment.paymentDate) : new Date();
+
+    return postEntry({
+        business: payment.business,
+        property: propertyId,
+        landlord: landlordId,
+        tenant: payment.tenant || null,
+        unit: payment.unit || null,
+        sourceTransactionType: "rent_payment",
+        sourceTransactionId: String(payment._id),
+        transactionDate: txDate,
+        statementPeriodStart: start,
+        statementPeriodEnd: end,
+        category,
+        amount: Math.abs(Number(payment.amount || 0)),
+        direction: "credit",
+        payer: "tenant",
+        receiver: resolveLedgerReceiver(payment),
+        notes: `Auto-posted from receipt ${payment.receiptNumber || payment.referenceNumber || payment._id}`,
+        metadata: {
+            paymentType: payment.paymentType,
+            paymentMethod: payment.paymentMethod,
+            paidDirectToLandlord: !!payment.paidDirectToLandlord,
+            receiptNumber: payment.receiptNumber || null,
+            referenceNumber: payment.referenceNumber || null,
+        },
+        createdBy: userId,
+        approvedBy: userId,
+        approvedAt: new Date(),
+        status: "approved",
+    });
+};
+
+/**
+ * Helper: Reverse ledger entry when a payment is reversed
+ * Non-breaking: logs error but does not throw
+ * Idempotent: checks if reversal already exists before creating new one
+ */
+const tryReverseLedgerEntry = async (payment, userId, reason) => {
+    try {
+        // Find the original ledger entry for this payment
+        const originalLedgerEntry = await FinancialLedgerEntry.findOne({
+            sourceTransactionType: "rent_payment",
+            sourceTransactionId: payment._id,
+            category: { $ne: "REVERSAL" }, // Exclude existing reversals
+            reversedByEntry: null
+        });
+
+        if (!originalLedgerEntry) {
+            console.log(`[tryReverseLedgerEntry] No ledger entry found for payment ${payment._id}, skipping ledger reversal`);
+            return;
+        }
+
+        // Idempotency check: ensure reversal doesn't already exist
+        const existingReversal = await FinancialLedgerEntry.findOne({
+            reversalOf: originalLedgerEntry._id,
+            category: "REVERSAL"
+        });
+
+        if (existingReversal) {
+            console.log(`[tryReverseLedgerEntry] Reversal already exists for ledger entry ${originalLedgerEntry._id}, skipping duplicate reversal`);
+            return;
+        }
+
+        // Post the reversal
+        const reversalResult = await postReversal({
+            entryId: originalLedgerEntry._id,
+            reason: reason || "Payment reversed",
+            userId: userId
+        });
+
+        console.log(`[tryReverseLedgerEntry] Ledger reversal created for payment ${payment._id}:`, reversalResult.reversalEntry._id);
+    } catch (error) {
+        console.error(`[tryReverseLedgerEntry] Failed to reverse ledger entry for payment ${payment._id}:`, error);
+        // Non-breaking: do not throw
+    }
 };
 
 // Create payment
@@ -57,6 +194,14 @@ export const createPayment = async (req, res, next) => {
         // If payment is confirmed, update tenant balance
         if (savedPayment.isConfirmed) {
             await updateTenantBalance(savedPayment);
+            try {
+                const actorId = req.user?._id || req.user?.id;
+                if (actorId) {
+                    await tryPostPaymentLedgerEntry(savedPayment, actorId);
+                }
+            } catch (ledgerErr) {
+                console.error("Ledger auto-post failed on createPayment:", ledgerErr?.message || ledgerErr);
+            }
         }
         
         // Emit real-time socket event to company
@@ -134,6 +279,12 @@ export const updatePayment = async(req, res, next) => {
 export const confirmPayment = async(req, res, next) => {
     try {
         const { confirmedBy } = req.body;
+
+        const existingPayment = await RentPayment.findById(req.params.id);
+        if (!existingPayment) return res.status(404).json({ message: "Payment not found" });
+        if (existingPayment.isConfirmed) {
+            return res.status(200).json(existingPayment);
+        }
         
         const updatedPayment = await RentPayment.findByIdAndUpdate(
             req.params.id,
@@ -149,6 +300,15 @@ export const confirmPayment = async(req, res, next) => {
         
         // Update tenant balance
         await updateTenantBalance(updatedPayment);
+
+        try {
+            const actorId = req.user?._id || req.user?.id || confirmedBy;
+            if (actorId) {
+                await tryPostPaymentLedgerEntry(updatedPayment, actorId);
+            }
+        } catch (ledgerErr) {
+            console.error("Ledger auto-post failed on confirmPayment:", ledgerErr?.message || ledgerErr);
+        }
         
         res.status(200).json(updatedPayment);
     } catch (err) {
@@ -351,6 +511,9 @@ export const reversePayment = async(req, res, next) => {
 
         // Apply tenant balance update through existing helper (negative amount adds balance back)
         await updateTenantBalance(reversalEntry);
+
+        // Post ledger reversal entry (non-breaking, idempotent)
+        await tryReverseLedgerEntry(payment, reversedBy, reason);
 
         emitToCompany(businessId, 'payment:reversed', {
             paymentId: payment._id,

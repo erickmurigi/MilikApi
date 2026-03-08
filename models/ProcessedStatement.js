@@ -26,6 +26,11 @@ const ProcessedStatementSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    statementType: {
+      type: String,
+      enum: ["provisional", "final"],
+      default: "provisional",
+    },
     // Statement summary data
     totalRentInvoiced: {
       type: Number,
@@ -35,13 +40,37 @@ const ProcessedStatementSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    totalRentReceivedByManager: {
+      type: Number,
+      default: 0,
+    },
+    totalRentReceivedByLandlord: {
+      type: Number,
+      default: 0,
+    },
+    totalUtilitiesCollected: {
+      type: Number,
+      default: 0,
+    },
+    depositsHeldByManager: {
+      type: Number,
+      default: 0,
+    },
+    depositsHeldByLandlord: {
+      type: Number,
+      default: 0,
+    },
+    unappliedPayments: {
+      type: Number,
+      default: 0,
+    },
     commissionPercentage: {
       type: Number,
       default: 0,
     },
     commissionBasis: {
       type: String,
-      enum: ["invoiced", "received"],
+      enum: ["invoiced", "received", "received_manager_only"],
       default: "received",
     },
     commissionAmount: {
@@ -52,6 +81,51 @@ const ProcessedStatementSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    totalExpenses: {
+      type: Number,
+      default: 0,
+    },
+    recurringDeductions: {
+      type: Number,
+      default: 0,
+    },
+    advanceRecoveries: {
+      type: Number,
+      default: 0,
+    },
+    expensesByCategory: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    netAfterExpenses: {
+      type: Number,
+      default: 0,
+    },
+    isNegativeStatement: {
+      type: Boolean,
+      default: false,
+    },
+    amountPayableByLandlordToManager: {
+      type: Number,
+      default: 0,
+    },
+    summaryBuckets: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    financialEvents: [
+      {
+        eventType: { type: String },
+        bucket: { type: String },
+        amount: { type: Number, default: 0 },
+        date: { type: Date },
+        tenantId: { type: String },
+        unit: { type: String },
+        tenantName: { type: String },
+        reference: { type: String },
+        meta: { type: mongoose.Schema.Types.Mixed, default: {} },
+      },
+    ],
     occupiedUnits: {
       type: Number,
       default: 0,
