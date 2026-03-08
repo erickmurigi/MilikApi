@@ -2,6 +2,7 @@ import LandlordStatement from "../../models/LandlordStatement.js";
 import LandlordStatementLine from "../../models/LandlordStatementLine.js";
 import {
   createDraftStatement,
+  refreshDraftStatement,
   approveStatement,
   getStatementById,
   createRevision,
@@ -38,19 +39,21 @@ export const createDraft = async (req, res, next) => {
     });
 
     if (existingDraft) {
-      // Return existing draft with lines
+      // Refresh existing draft from latest immutable ledger entries.
+      const refreshed = await refreshDraftStatement(existingDraft._id, userId, notes || "");
       const lines = await LandlordStatementLine.find({ statement: existingDraft._id })
         .sort({ lineNumber: 1 })
         .lean();
 
       return res.status(200).json({
         success: true,
-        message: "Draft statement already exists for this period",
+        message: "Existing draft refreshed from latest ledger entries",
         data: {
-          statement: existingDraft,
+          statement: refreshed.statement,
           lines,
           lineCount: lines.length,
           isExisting: true,
+          refreshed: true,
         },
       });
     }
@@ -195,7 +198,7 @@ export const approve = async (req, res, next) => {
 export const getStatement = async (req, res, next) => {
   try {
     const { statementId } = req.params;
-    const { includeLines = "true", populateRefs = "false" } = req.query;
+    const { includeLines = "true", populateRefs = "true" } = req.query;
     const businessId = req.user.company;
 
     if (!statementId) {
@@ -280,7 +283,7 @@ export const listStatementsForLandlord = async (req, res, next) => {
       .sort({ periodStart: -1, version: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .populate("property", "name address")
+      .populate("property", "name propertyName address city")
       .populate("landlord", "firstName lastName email phone")
       .populate("approvedBy", "surname otherNames email")
       .lean();

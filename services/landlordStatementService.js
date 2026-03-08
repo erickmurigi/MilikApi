@@ -3,6 +3,11 @@ import {
   getEntriesForStatement,
   getLedgerTotalsByCategory,
 } from "./ledgerQueryService.js";
+import Property from "../models/Property.js";
+
+const toAbs = (value) => Math.abs(Number(value || 0));
+
+const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
 /**
  * Categories typically appearing in landlord statements.
@@ -85,10 +90,38 @@ export const generateLandlordStatement = async ({
     const dateA = new Date(a.transactionDate).getTime();
     const dateB = new Date(b.transactionDate).getTime();
     if (dateA !== dateB) return dateA - dateB;
-    
     const createdA = new Date(a.createdAt || 0).getTime();
     const createdB = new Date(b.createdAt || 0).getTime();
     return createdA - createdB;
+  });
+
+  // Step 3.5: Fetch all tenants for the property
+  const Tenant = (await import('../models/Tenant.js')).default;
+  const Unit = (await import('../models/Unit.js')).default;
+  const allUnits = await Unit.find({ property: propertyId }).select('_id').lean();
+  const unitIds = allUnits.map(u => u._id);
+  const allTenants = await Tenant.find({ unit: { $in: unitIds }, status: { $in: ['active', 'overdue'] } }).lean();
+
+  // Step 3.6: Ensure every tenant is represented in the statement lines
+  const tenantIdsInLines = new Set(entries.map(e => String(e.tenant?._id || e.tenant || '')));
+  allTenants.forEach(tenant => {
+    const tid = String(tenant._id);
+    if (!tenantIdsInLines.has(tid)) {
+      // Add a placeholder line for this tenant
+      entries.push({
+        tenant: tenant._id,
+        unit: tenant.unit,
+        amount: 0,
+        direction: 'credit',
+        category: 'RENT_CHARGE',
+        metadata: {
+          tenantName: tenant.name,
+          unit: tenant.unit,
+        },
+        createdAt: periodStart,
+        transactionDate: periodStart,
+      });
+    }
   });
 
   // Step 4: Get totals grouped by category for the period
@@ -116,17 +149,66 @@ export const generateLandlordStatement = async ({
     return acc;
   }, {});
 
-  // Step 6: Calculate periodNet from totalsByCategory
-  // This ensures displayed categories reconcile to period net
-  const periodNet = Object.values(categorySummary).reduce(
-    (sum, cat) => sum + Number(cat.totalAmount || 0),
-    0
-  );
+  // Step 6: Apply commission deduction using property recognition basis when
+  // no explicit COMMISSION_CHARGE was posted in ledger for the period.
+  const property = await Property.findById(propertyId)
+    .select("commissionPercentage commissionRecognitionBasis")
+    .lean();
 
-  // Step 7: Compute closing balance
+  const commissionPct = Number(property?.commissionPercentage || 0);
+  const recognitionBasis = String(property?.commissionRecognitionBasis || "received").toLowerCase();
+
+  const rentInvoiced = toAbs(categorySummary.RENT_CHARGE?.totalAmount);
+  const rentReceivedManager = toAbs(categorySummary.RENT_RECEIPT_MANAGER?.totalAmount);
+  const rentReceivedAll =
+    toAbs(categorySummary.RENT_RECEIPT_MANAGER?.totalAmount) +
+    toAbs(categorySummary.RENT_RECEIPT_LANDLORD?.totalAmount);
+
+  let commissionBase = rentReceivedAll;
+  if (recognitionBasis === "invoiced") {
+    commissionBase = rentInvoiced;
+  } else if (recognitionBasis === "received_manager_only") {
+    commissionBase = rentReceivedManager;
+  }
+
+  const existingCommission = toAbs(categorySummary.COMMISSION_CHARGE?.totalAmount);
+  const computedCommission = commissionPct > 0 ? round2((commissionBase * commissionPct) / 100) : 0;
+  const effectiveCommission = existingCommission > 0 ? existingCommission : computedCommission;
+
+  if (existingCommission === 0 && effectiveCommission > 0) {
+    categorySummary.COMMISSION_CHARGE = {
+      count: 1,
+      totalAmount: -effectiveCommission,
+      totalDebit: effectiveCommission,
+      totalCredit: 0,
+    };
+  }
+
+  // Step 7: Calculate periodNet from totalsByCategory
+  // For accrual mode, ensure periodNet is calculated from invoiced rent minus expenses and commission
+  let periodNet;
+  if (recognitionBasis === "invoiced") {
+    const expenses =
+      toAbs(categorySummary.EXPENSE_DEDUCTION?.totalAmount) +
+      toAbs(categorySummary.RECURRING_DEDUCTION?.totalAmount) +
+      toAbs(categorySummary.ADVANCE_RECOVERY?.totalAmount) +
+      toAbs(categorySummary.WRITE_OFF?.totalAmount);
+    const additions =
+      toAbs(categorySummary.ADJUSTMENT?.totalAmount) +
+      toAbs(categorySummary.ADVANCE_TO_LANDLORD?.totalAmount);
+    const commission = toAbs(categorySummary.COMMISSION_CHARGE?.totalAmount);
+    periodNet = rentInvoiced + additions - expenses - commission;
+  } else {
+    periodNet = Object.values(categorySummary).reduce(
+      (sum, cat) => sum + Number(cat.totalAmount || 0),
+      0
+    );
+  }
+
+  // Step 8: Compute closing balance
   const closingBalance = openingBalance + periodNet;
 
-  // Step 8: Return structured statement object
+  // Step 9: Return structured statement object
   return {
     propertyId,
     landlordId,

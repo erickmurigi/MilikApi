@@ -155,6 +155,101 @@ export const createDraftStatement = async ({
 };
 
 /**
+ * Refresh an existing draft statement from current ledger entries.
+ * Used when users regenerate draft after new invoices/receipts are posted.
+ *
+ * @param {string} statementId - Draft statement ID
+ * @param {string} userId - User refreshing the draft
+ * @param {string} notes - Optional notes override
+ *
+ * @returns {Promise<Object>} Refreshed draft with latest lines
+ */
+export const refreshDraftStatement = async (statementId, userId, notes = "") => {
+  if (!statementId || !userId) {
+    throw new Error("refreshDraftStatement requires statementId and userId");
+  }
+
+  const draft = await LandlordStatement.findById(statementId);
+  if (!draft) {
+    throw new Error("Draft statement not found");
+  }
+
+  if (draft.status !== "draft") {
+    throw new Error("Only draft statements can be refreshed");
+  }
+
+  const statementData = await generateLandlordStatement({
+    propertyId: draft.property,
+    landlordId: draft.landlord,
+    statementPeriodStart: draft.periodStart,
+    statementPeriodEnd: draft.periodEnd,
+  });
+
+  // Replace all existing draft lines with refreshed lines.
+  await LandlordStatementLine.deleteMany({ statement: draft._id });
+
+  const lines = [];
+  let runningBalance = statementData.openingBalance;
+
+  for (let i = 0; i < statementData.entries.length; i++) {
+    const entry = statementData.entries[i];
+    const signedAmount = entry.direction === "debit" ? -Math.abs(entry.amount) : Math.abs(entry.amount);
+    runningBalance += signedAmount;
+
+    lines.push({
+      statement: draft._id,
+      business: draft.business,
+      property: draft.property,
+      landlord: draft.landlord,
+      tenant: entry.tenant || null,
+      unit: entry.unit || null,
+      transactionDate: entry.transactionDate,
+      category: entry.category,
+      description: entry.notes || entry.description || `${entry.category} entry`,
+      amount: Math.abs(entry.amount),
+      direction: entry.direction,
+      runningBalance,
+      sourceLedgerEntryId: entry._id,
+      sourceTransactionType: entry.sourceTransactionType || null,
+      sourceTransactionId: entry.sourceTransactionId || null,
+      lineNumber: i + 1,
+      metadata: entry.metadata || {},
+    });
+  }
+
+  if (lines.length > 0) {
+    await LandlordStatementLine.insertMany(lines);
+  }
+
+  draft.openingBalance = statementData.openingBalance;
+  draft.periodNet = statementData.periodNet;
+  draft.closingBalance = statementData.closingBalance;
+  draft.currency = statementData.currency;
+  draft.totalsByCategory = statementData.totalsByCategory;
+  draft.entryCount = statementData.entries.length;
+  draft.lineCount = statementData.entries.length;
+  draft.ledgerEntryCount = statementData.entries.length;
+  draft.ledgerEntryIds = statementData.entries.map((entry) => entry._id);
+  draft.generatedAt = new Date();
+  if (notes) {
+    draft.notes = notes;
+  }
+  draft.metadata = {
+    ...(draft.metadata || {}),
+    refreshedBy: userId,
+    refreshedAt: new Date(),
+    entryCount: statementData.entries.length,
+  };
+
+  await draft.save();
+
+  return {
+    statement: draft,
+    lineCount: lines.length,
+  };
+};
+
+/**
  * Approve a draft statement, freezing it as immutable.
  * Once approved, the statement and its lines cannot be modified.
  *
@@ -221,8 +316,8 @@ export const getStatementById = async (statementId, options = {}) => {
 
   if (populateRefs) {
     query = query
-      .populate("property", "name address")
-      .populate("landlord", "firstName lastName email phone")
+      .populate("property", "name propertyName address city commissionPercentage commissionRecognitionBasis")
+      .populate("landlord", "landlordName landlordType email phoneNumber")
       .populate("approvedBy", "surname otherNames email")
       .populate("sentBy", "surname otherNames email");
   }
@@ -238,6 +333,8 @@ export const getStatementById = async (statementId, options = {}) => {
 
   // Always sort lines by lineNumber ASC for deterministic rendering
   const lines = await LandlordStatementLine.find({ statement: statementId })
+    .populate("tenant", "name paymentMethod phone idNumber")
+    .populate("unit", "unitNumber name")
     .sort({ lineNumber: 1 })
     .lean();
 
@@ -461,6 +558,7 @@ export const validateStatementAudit = async (statementId) => {
 
 export default {
   createDraftStatement,
+  refreshDraftStatement,
   approveStatement,
   getStatementById,
   createRevision,

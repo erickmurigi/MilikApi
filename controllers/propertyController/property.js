@@ -98,20 +98,21 @@ export const createProperty = async (req, res) => {
     const validLandlords = (landlords || [])
        .filter(landlord => {
          const landlordName = landlord?.name?.trim() || landlord?.landlordName?.trim() || '';
-         return landlordName && landlordName.toLowerCase() !== 'default';
+         const hasLandlordId = landlord?.landlordId && mongoose.Types.ObjectId.isValid(landlord.landlordId);
+         return landlordName && landlordName.toLowerCase() !== 'default' && hasLandlordId;
        })
       .map((landlord, index) => ({
-        landlordId: landlord.landlordId || null, // Store the Landlord ID if provided
+        landlordId: landlord.landlordId, // Required - Store the Landlord ID
          name: (landlord?.name || landlord?.landlordName || '').trim(),
         contact: landlord.contact?.trim() || '',
         isPrimary: index === 0
       }));
 
-    // Require at least one valid landlord
+    // Require at least one valid landlord with landlordId
     if (validLandlords.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'At least one landlord is required. Please select a landlord from the list.'
+        message: 'At least one landlord with a valid landlordId is required. Please select a landlord from the list.'
       });
     }
 
@@ -306,6 +307,7 @@ export const getProperties = async(req, res, next) => {
       .populate('business', 'companyName')
       .populate('createdBy', 'surname otherNames email')
       .populate('updatedBy', 'surname otherNames email')
+      .populate('landlords.landlordId', '_id landlordName firstName lastName email')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
@@ -422,9 +424,13 @@ export const updateProperty = async(req, res, next) => {
     // Validate landlords if being updated
     if (req.body.landlords) {
       const validLandlords = (req.body.landlords || [])
-        .filter(landlord => landlord?.name?.trim() && landlord.name.trim().toLowerCase() !== 'default')
+        .filter(landlord => {
+          const landlordName = landlord?.name?.trim() || '';
+          const hasLandlordId = landlord?.landlordId && mongoose.Types.ObjectId.isValid(landlord.landlordId);
+          return landlordName && landlordName.toLowerCase() !== 'default' && hasLandlordId;
+        })
         .map((landlord, index) => ({
-          landlordId: landlord.landlordId || null,
+          landlordId: landlord.landlordId, // Required - Store the Landlord ID
           name: landlord.name.trim(),
           contact: landlord.contact?.trim() || '',
           isPrimary: index === 0
@@ -433,7 +439,7 @@ export const updateProperty = async(req, res, next) => {
       if (validLandlords.length === 0) {
         return res.status(400).json({
           success: false,
-          message: 'At least one valid landlord is required. Please select a landlord from the list.'
+          message: 'At least one valid landlord with a valid landlordId is required. Please select a landlord from the list.'
         });
       }
 

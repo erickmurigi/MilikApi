@@ -45,12 +45,23 @@ const getStatementPeriodFromPayment = (payment) => {
 };
 
 const resolveLedgerCategory = (payment) => {
+    if (payment?.ledgerType === "invoices") {
+        if (payment?.paymentType === "rent") return "RENT_CHARGE";
+        if (payment?.paymentType === "utility") return "UTILITY_CHARGE";
+        return null;
+    }
     if (payment?.paymentType !== "rent") return null;
     const paidDirect = !!payment?.paidDirectToLandlord;
     return paidDirect ? "RENT_RECEIPT_LANDLORD" : "RENT_RECEIPT_MANAGER";
 };
 
+const resolveLedgerDirection = (payment) => {
+    if (payment?.ledgerType === "invoices") return "debit";
+    return "credit";
+};
+
 const resolveLedgerReceiver = (payment) => {
+    if (payment?.ledgerType === "invoices") return "manager";
     return payment?.paidDirectToLandlord ? "landlord" : "manager";
 };
 
@@ -102,14 +113,16 @@ const tryPostPaymentLedgerEntry = async (payment, userId) => {
         statementPeriodEnd: end,
         category,
         amount: Math.abs(Number(payment.amount || 0)),
-        direction: "credit",
+        direction: resolveLedgerDirection(payment),
         payer: "tenant",
         receiver: resolveLedgerReceiver(payment),
-        notes: `Auto-posted from receipt ${payment.receiptNumber || payment.referenceNumber || payment._id}`,
+        notes: `Auto-posted from ${payment?.ledgerType === "invoices" ? "invoice" : "receipt"} ${payment.receiptNumber || payment.referenceNumber || payment._id}`,
         metadata: {
             paymentType: payment.paymentType,
             paymentMethod: payment.paymentMethod,
+            cashbook: payment.cashbook || "Main Cashbook",
             paidDirectToLandlord: !!payment.paidDirectToLandlord,
+            ledgerType: payment.ledgerType || "receipts",
             receiptNumber: payment.receiptNumber || null,
             referenceNumber: payment.referenceNumber || null,
         },
@@ -194,6 +207,11 @@ export const createPayment = async (req, res, next) => {
         // If payment is confirmed, update tenant balance
         if (savedPayment.isConfirmed) {
             await updateTenantBalance(savedPayment);
+        }
+
+        // Auto-post to immutable ledger for confirmed receipts and all invoice bookings.
+        const shouldPostToLedger = savedPayment.isConfirmed || savedPayment.ledgerType === "invoices";
+        if (shouldPostToLedger) {
             try {
                 const actorId = req.user?._id || req.user?.id;
                 if (actorId) {

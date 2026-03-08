@@ -33,6 +33,11 @@ const RentPaymentSchema = new mongoose.Schema(
       enum: ['bank_transfer', 'mobile_money', 'cash', 'check', 'credit_card'],
       required: true 
     },
+    cashbook: {
+      type: String,
+      trim: true,
+      default: "Main Cashbook",
+    },
     paidDirectToLandlord: { type: Boolean, default: false },
     ledgerType: {
       type: String,
