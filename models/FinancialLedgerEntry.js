@@ -110,6 +110,28 @@ const FinancialLedgerEntrySchema = new mongoose.Schema(
       index: true,
     },
 
+    accountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ChartOfAccount",
+      default: null,
+      index: true,
+    },
+    debit: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    credit: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    journalGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "JournalGroup",
+      default: null,
+      index: true,
+    },
     amount: {
       type: Number,
       required: true,

@@ -50,18 +50,24 @@ router.get("/summary", verifyUser, async (req, res) => {
     const occupiedUnits = units.filter(unit => unit.status === 'occupied' || !unit.isVacant).length;
     const vacantUnits = totalUnits - occupiedUnits;
     
+    // Only count true receipts (not invoices or unreceipted payments)
+    const isReceipt = (p) =>
+      p.isConfirmed === true &&
+      (p.ledgerType === 'receipts' || p.ledgerType === 'cashbook') &&
+      typeof p.receiptNumber === 'string' && p.receiptNumber.trim() !== '';
+
     const totalRevenue = payments
-      .filter(p => p.isConfirmed && p.paymentType === 'rent')
+      .filter(p => isReceipt(p) && p.paymentType === 'rent')
       .reduce((sum, p) => sum + (p.amount || 0), 0);
-    
+
     const totalDeposits = payments
-      .filter(p => p.isConfirmed && p.paymentType === 'deposit')
+      .filter(p => isReceipt(p) && p.paymentType === 'deposit')
       .reduce((sum, p) => sum + (p.amount || 0), 0);
-    
+
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const monthlyRevenue = payments
-      .filter(p => p.isConfirmed && p.paymentType === 'rent' && new Date(p.paymentDate) >= thirtyDaysAgo)
+      .filter(p => isReceipt(p) && p.paymentType === 'rent' && new Date(p.paymentDate) >= thirtyDaysAgo)
       .reduce((sum, p) => sum + (p.amount || 0), 0);
 
     const pendingPayments = payments.filter(p => !p.isConfirmed).length;
