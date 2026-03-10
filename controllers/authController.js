@@ -1,141 +1,4 @@
-import User from "../models/User.js";
-import Company from "../models/Company.js";
-import { createError } from "../utils/error.js";
-import jwt from "jsonwebtoken";
-
-// Get JWT secret with lazy validation
-const getJWTSecret = () => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error("JWT_SECRET environment variable is required");
-  }
-  return secret;
-};
-
-// Get admin credentials with lazy loading
-const getAdminCredentials = () => {
-  return {
-    email: process.env.MILIK_ADMIN_EMAIL?.toLowerCase(),
-    password: process.env.MILIK_ADMIN_PASSWORD,
-    name: process.env.MILIK_ADMIN_NAME || "Milik Admin"
-  };
-};
-
-// ========== LOGIN ==========
-export const loginUser = async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return next(createError(400, "Email and password are required"));
-    }
-
-    const normalizedEmail = String(email).toLowerCase().trim();
-
-    // System admin login (only if credentials are configured)
-    const adminCreds = getAdminCredentials();
-    // Debug log for troubleshooting admin login
-    console.log("ADMIN LOGIN DEBUG:", {
-      receivedEmail: normalizedEmail,
-      receivedPassword: password,
-      envEmail: adminCreds.email,
-      envPassword: adminCreds.password,
-      envName: adminCreds.name
-    });
-    if (adminCreds.email && adminCreds.password && 
-        normalizedEmail === adminCreds.email && password === adminCreds.password) {
-      const token = jwt.sign(
-        {
-          id: "milik-admin",
-          email: adminCreds.email,
-          profile: "Administrator",
-          superAdminAccess: true,
-          adminAccess: true,
-          isSystemAdmin: true,
-          company: null,
-        },
-        getJWTSecret(),
-        { expiresIn: "7d" }
-      );
-
-      return res.status(200).json({
-        success: true,
-        token,
-        user: {
-          _id: "milik-admin",
-          email: adminCreds.email,
-          surname: adminCreds.name,
-          otherNames: "",
-          profile: "Administrator",
-          superAdminAccess: true,
-          adminAccess: true,
-          isSystemAdmin: true,
-          company: { companyName: "Milik System" },
-          isActive: true,
-        },
-        message: "Login successful"
-      });
-    }
-
-    // Find user by email (case-insensitive)
-    const user = await User.findOne({ email: normalizedEmail })
-      .populate('company', 'companyName');
-
-    if (!user) {
-      return next(createError(401, "Invalid email or password"));
-    }
-
-    // Check if user is active
-    if (!user.isActive) {
-      return next(createError(403, "User account is inactive"));
-    }
-
-    // Check if user is locked
-    if (user.locked) {
-      return next(createError(403, "User account is locked"));
-    }
-
-    // Compare password
-    const isPasswordCorrect = await user.comparePassword(password);
-    if (!isPasswordCorrect) {
-      return next(createError(401, "Invalid email or password"));
-    }
-
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
-    // Generate JWT token
-    const token = jwt.sign(
-      {
-        id: user._id,
-        email: user.email,
-        company: user.company._id,
-        profile: user.profile,
-        superAdminAccess: user.superAdminAccess,
-        adminAccess: user.adminAccess,
-      },
-      getJWTSecret(),
-      { expiresIn: '7d' }
-    );
-
-    // Return user without password
-    const { password: pass, ...userDetails } = user._doc;
-
-    res.status(200).json({
-      success: true,
-      token,
-      user: userDetails,
-      message: "Login successful"
-    });
-
-  } catch (err) {
-    console.error('Login error:', err);
-    next(err);
-  }
-};
-
-// ========== REGISTER USER (Admin only) ==========
+// ========== REGISTER USER (Admin only) ===========
 export const registerUser = async (req, res, next) => {
   try {
     const { email, password, surname, otherNames, phoneNumber, company, profile, idNumber } = req.body;
@@ -200,6 +63,116 @@ export const registerUser = async (req, res, next) => {
     }
     console.error('Register error:', err);
     next(err);
+  }
+};
+import User from "../models/User.js";
+import Company from "../models/Company.js";
+import { createError } from "../utils/error.js";
+import jwt from "jsonwebtoken";
+
+// Get JWT secret with lazy validation
+const getJWTSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
+};
+
+// Get admin credentials with lazy loading
+const getAdminCredentials = () => {
+  return {
+    email: process.env.MILIK_ADMIN_EMAIL?.toLowerCase(),
+    password: process.env.MILIK_ADMIN_PASSWORD,
+    name: process.env.MILIK_ADMIN_NAME || "Milik Admin"
+  };
+};
+
+// ========== LOGIN ==========
+export const loginUser = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return next(createError(400, "Email and password are required"));
+    }
+    const normalizedEmail = String(email).toLowerCase().trim();
+    // Centralized admin login logic
+    const adminCreds = getAdminCredentials();
+    if (
+      adminCreds.email &&
+      adminCreds.password &&
+      normalizedEmail === adminCreds.email &&
+      password === adminCreds.password
+    ) {
+      const token = jwt.sign(
+        {
+          id: "milik-admin",
+          email: adminCreds.email,
+          profile: "Administrator",
+          superAdminAccess: true,
+          adminAccess: true,
+          isSystemAdmin: true,
+          company: null,
+        },
+        getJWTSecret(),
+        { expiresIn: "7d" }
+      );
+      return res.status(200).json({
+        success: true,
+        token,
+        user: {
+          _id: "milik-admin",
+          email: adminCreds.email,
+          surname: adminCreds.name,
+          otherNames: "",
+          profile: "Administrator",
+          superAdminAccess: true,
+          adminAccess: true,
+          isSystemAdmin: true,
+          company: { companyName: "Milik System" },
+          isActive: true,
+        },
+        message: "Login successful"
+      });
+    }
+    // Find user by email (case-insensitive)
+    const user = await User.findOne({ email: normalizedEmail }).populate('company', 'companyName');
+    if (!user) {
+      return next(createError(401, "Invalid email or password"));
+    }
+    if (!user.isActive) {
+      return next(createError(403, "User account is inactive"));
+    }
+    if (user.locked) {
+      return next(createError(403, "User account is locked"));
+    }
+    const isPasswordCorrect = await user.comparePassword(password);
+    if (!isPasswordCorrect) {
+      return next(createError(401, "Invalid email or password"));
+    }
+    user.lastLogin = new Date();
+    await user.save();
+    const token = jwt.sign(
+      {
+        id: user._id,
+        email: user.email,
+        company: user.company._id,
+        profile: user.profile,
+        superAdminAccess: user.superAdminAccess,
+        adminAccess: user.adminAccess,
+      },
+      getJWTSecret(),
+      { expiresIn: '7d' }
+    );
+    const { password: pass, ...userDetails } = user._doc;
+    res.status(200).json({
+      success: true,
+      token,
+      user: userDetails,
+      message: "Login successful"
+    });
+  } catch (err) {
+    next(createError(500, `Login error: ${err.message}`));
   }
 };
 

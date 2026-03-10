@@ -27,7 +27,8 @@ const TenantInvoiceSchema = new mongoose.Schema(
       }
     },
     status: { type: String, enum: ['pending', 'paid', 'partially_paid'], default: 'pending' },
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    chartAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'FinancialLedgerEntry', required: true }
     // Remove manual createdAt, updatedAt
   },
   { timestamps: true }

@@ -1,3 +1,8 @@
+    // Optional: Track running balance for this account
+    balance: {
+      type: Number,
+      default: 0,
+    },
 import mongoose from "mongoose";
 
 const LEDGER_CATEGORIES = [
