@@ -39,18 +39,92 @@ export const payLandlord = async (req, res, next) => {
 
     await statement.save();
 
-    // TODO: Create payment voucher and post to ledger
-    // This would involve:
-    // 1. Creating a payment voucher record
-    // 2. Posting double-entry to ledger:
-    //    DR: Landlord Payable Account (decrease liability)
-    //    CR: Bank/Cash Account (decrease asset)
+    // 1. Create payment voucher
+    const PaymentVoucher = (await import("../../models/PaymentVoucher.js")).default;
+    const generateVoucherNo = async (businessId) => {
+      const prefix = "PV";
+      const lastVoucher = await PaymentVoucher.findOne(
+        { business: businessId, voucherNo: { $regex: `^${prefix}\\d+$` } },
+        { voucherNo: 1 },
+        { sort: { createdAt: -1 } }
+      );
+      let seq = 1;
+      if (lastVoucher?.voucherNo) {
+        seq = (parseInt(lastVoucher.voucherNo.replace(prefix, ""), 10) || 0) + 1;
+      }
+      return `${prefix}${String(seq).padStart(5, "0")}`;
+    };
+
+    const voucherNo = await generateVoucherNo(statement.business);
+    const voucher = await PaymentVoucher.create({
+      voucherNo,
+      category: "landlord_other",
+      status: "approved",
+      property: statement.property,
+      landlord: statement.landlord,
+      amount: statement.amountPaid,
+      dueDate: new Date(),
+      paidDate: new Date(),
+      reference: statement._id,
+      narration: `Landlord payment for statement ${statement._id}`,
+      approvedBy: req.user._id || req.user.id,
+      approvedAt: new Date(),
+      paidBy: req.user._id || req.user.id,
+      paidAt: new Date(),
+      business: statement.business,
+    });
+
+    // 2. Post double-entry to ledger
+    const { postEntry } = await import("../../services/ledgerPostingService.js");
+    // DR: Landlord Payable Account (decrease liability)
+    await postEntry({
+      business: statement.business,
+      property: statement.property,
+      landlord: statement.landlord,
+      sourceTransactionType: "payment_voucher",
+      sourceTransactionId: voucher._id,
+      transactionDate: new Date(),
+      statementPeriodStart: statement.periodStart,
+      statementPeriodEnd: statement.periodEnd,
+      category: "EXPENSE_DEDUCTION",
+      amount: statement.amountPaid,
+      direction: "debit",
+      payer: "manager",
+      receiver: "landlord",
+      notes: `Landlord payment voucher ${voucherNo}`,
+      createdBy: req.user._id || req.user.id,
+      approvedBy: req.user._id || req.user.id,
+      approvedAt: new Date(),
+      status: "approved",
+    });
+    // CR: Bank/Cash Account (decrease asset)
+    await postEntry({
+      business: statement.business,
+      property: statement.property,
+      landlord: statement.landlord,
+      sourceTransactionType: "payment_voucher",
+      sourceTransactionId: voucher._id,
+      transactionDate: new Date(),
+      statementPeriodStart: statement.periodStart,
+      statementPeriodEnd: statement.periodEnd,
+      category: "EXPENSE_DEDUCTION",
+      amount: statement.amountPaid,
+      direction: "credit",
+      payer: "manager",
+      receiver: "bank",
+      notes: `Landlord payment voucher ${voucherNo}`,
+      createdBy: req.user._id || req.user.id,
+      approvedBy: req.user._id || req.user.id,
+      approvedAt: new Date(),
+      status: "approved",
+    });
 
     res.status(200).json({
       success: true,
       message: "Payment recorded successfully",
       data: {
         statement,
+        voucher,
       },
     });
   } catch (err) {
@@ -94,10 +168,50 @@ export const postCommission = async (req, res, next) => {
 
     await statement.save();
 
-    // TODO: Post commission to ledger
-    // This would involve posting double-entry to ledger:
-    // DR: Landlord Payable Account (decrease the liability we owe to landlord)
+    // Post commission to ledger
+    const { postEntry } = await import("../../services/ledgerPostingService.js");
+    // DR: Landlord Payable Account (decrease liability)
+    await postEntry({
+      business: statement.business,
+      property: statement.property,
+      landlord: statement.landlord,
+      sourceTransactionType: "commission_posting",
+      sourceTransactionId: statement._id,
+      transactionDate: postingDate ? new Date(postingDate) : new Date(),
+      statementPeriodStart: statement.periodStart,
+      statementPeriodEnd: statement.periodEnd,
+      category: "COMMISSION_CHARGE",
+      amount: amount,
+      direction: "debit",
+      payer: "manager",
+      receiver: "landlord",
+      notes: `Commission posting for statement ${statement._id}`,
+      createdBy: req.user._id || req.user.id,
+      approvedBy: req.user._id || req.user.id,
+      approvedAt: new Date(),
+      status: "approved",
+    });
     // CR: Commission Income Account (increase revenue)
+    await postEntry({
+      business: statement.business,
+      property: statement.property,
+      landlord: statement.landlord,
+      sourceTransactionType: "commission_posting",
+      sourceTransactionId: statement._id,
+      transactionDate: postingDate ? new Date(postingDate) : new Date(),
+      statementPeriodStart: statement.periodStart,
+      statementPeriodEnd: statement.periodEnd,
+      category: "COMMISSION_CHARGE",
+      amount: amount,
+      direction: "credit",
+      payer: "manager",
+      receiver: "system",
+      notes: `Commission posting for statement ${statement._id}`,
+      createdBy: req.user._id || req.user.id,
+      approvedBy: req.user._id || req.user.id,
+      approvedAt: new Date(),
+      status: "approved",
+    });
 
     res.status(200).json({
       success: true,

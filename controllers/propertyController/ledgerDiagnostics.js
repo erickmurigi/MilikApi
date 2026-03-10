@@ -26,17 +26,16 @@ export const checkInvoiceLedgerEntries = async (req, res) => {
       periodEnd = new Date(year, month, 0);
     }
 
-    // Find all invoice rent payments for this property/landlord
+    // Find all tenant invoices for this property/landlord
     const invoiceQuery = {
       business: businessId,
-      ledgerType: "invoices",
     };
 
     if (periodStart && periodEnd) {
-      invoiceQuery.paymentDate = { $gte: periodStart, $lte: periodEnd };
+      invoiceQuery.invoiceDate = { $gte: periodStart, $lte: periodEnd };
     }
 
-    const invoices = await RentPayment.find(invoiceQuery)
+    const invoices = await TenantInvoice.find(invoiceQuery)
       .populate('tenant', 'name')
       .populate('unit', 'unitNumber property')
       .lean();
@@ -48,58 +47,45 @@ export const checkInvoiceLedgerEntries = async (req, res) => {
 
     // Check each invoice for ledger entry
     const diagnostics = [];
-    for (const invoice of relevantInvoices) {
-      const ledgerEntry = await FinancialLedgerEntry.findOne({
-        sourceTransactionType: "rent_payment",
-        sourceTransactionId: invoice._id,
-        status: "approved",
-      });
+        for (const invoice of relevantInvoices) {
+          const ledgerEntry = await FinancialLedgerEntry.findOne({
+            sourceTransactionType: "invoice",
+            sourceTransactionId: invoice._id,
+            status: "approved",
+          });
 
-      diagnostics.push({
-        invoiceId: invoice._id,
-        referenceNumber: invoice.referenceNumber,
-        tenant: invoice.tenant?.name || "Unknown",
-        unit: invoice.unit?.unitNumber || "Unknown",
-        amount: invoice.amount,
-        paymentType: invoice.paymentType,
-        paymentDate: invoice.paymentDate,
-        month: invoice.month,
-        year: invoice.year,
-        hasLedgerEntry: !!ledgerEntry,
-        ledgerCategory: ledgerEntry?.category || null,
-        ledgerPeriodStart: ledgerEntry?.statementPeriodStart || null,
-        ledgerPeriodEnd: ledgerEntry?.statementPeriodEnd || null,
-        ledgerAmount: ledgerEntry?.amount || null,
-        ledgerDirection: ledgerEntry?.direction || null,
-      });
+          diagnostics.push({
+            invoiceId: invoice._id,
+            invoiceNumber: invoice.invoiceNumber,
+            tenant: invoice.tenant?.name || "Unknown",
+            unit: invoice.unit?.unitNumber || "Unknown",
+            amount: invoice.amount,
+            category: invoice.category,
+            invoiceDate: invoice.invoiceDate,
+            dueDate: invoice.dueDate,
+            status: invoice.status,
+            hasLedgerEntry: !!ledgerEntry,
+            ledgerCategory: ledgerEntry?.category || null,
+            ledgerPeriodStart: ledgerEntry?.statementPeriodStart || null,
+            ledgerPeriodEnd: ledgerEntry?.statementPeriodEnd || null,
+            ledgerAmount: ledgerEntry?.amount || null,
+            ledgerDirection: ledgerEntry?.direction || null,
+          });
+        }
+
+        const summary = {
+          totalInvoices: diagnostics.length,
+          invoicesWithLedger: diagnostics.filter(d => d.hasLedgerEntry).length,
+          invoicesWithoutLedger: diagnostics.filter(d => !d.hasLedgerEntry).length,
+        };
+
+        res.status(200).json({ diagnostics, summary });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-
-    const summary = {
-      totalInvoices: diagnostics.length,
-      invoicesWithLedger: diagnostics.filter(d => d.hasLedgerEntry).length,
-      invoicesWithoutLedger: diagnostics.filter(d => !d.hasLedgerEntry).length,
-      rentCharges: diagnostics.filter(d => d.ledgerCategory === "RENT_CHARGE").length,
-      utilityCharges: diagnostics.filter(d => d.ledgerCategory === "UTILITY_CHARGE").length,
-    };
-
-    res.json({
-      success: true,
-      period: period || "all",
-      propertyId: propertyId || "all",
-      landlordId: landlordId || "all",
-      summary,
-      invoices: diagnostics,
-    });
-  } catch (error) {
-    console.error("Ledger diagnostics error:", error);
-    res.status(500).json({ error: error.message || "Diagnostic check failed" });
-  }
 };
 
-/**
- * Force re-post invoices to ledger (for fixing orphaned invoices)
- * POST /api/ledger/diagnostics/repost-invoices
- */
+// --- New export below ---
 export const repostInvoicesToLedger = async (req, res) => {
   try {
     const { propertyId, period } = req.body;

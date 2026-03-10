@@ -1,126 +1,73 @@
-import express from "express";
-const app = express();
-import mongoose from "mongoose";
-import dotenv from "dotenv";
-import cors from "cors";
-import helmet from "helmet";
-import morgan from "morgan";
-import rateLimit from "express-rate-limit";
-dotenv.config();
-import http from "http";
 import { Server } from "socket.io";
 import { setIO } from "./utils/socketManager.js";
-
-// Routes
-
-
-import authRoutes from './routes/auth.js';
-import userRoutes from './routes/user.js';
-
-
+import express from "express";
+import dotenv from "dotenv";
+import helmet from 'helmet';
+import morgan from "morgan";
+import rateLimit from "express-rate-limit";
+import mongoose from "mongoose";
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/user.js";
 import printerRoute from "./routes/printers.js";
-
-//property management routes
-import landlordRoutes from "./routes/propertyRoutes/landlords.js"
-import propertyRoutes from "./routes/propertyRoutes/properties.js"
-import utilityRoutes from "./routes/propertyRoutes/utilities.js"
-import unitRoutes from "./routes/propertyRoutes/units.js"
-import tenantRoutes from "./routes/propertyRoutes/tenants.js"
-import rentPaymentRoutes from "./routes/propertyRoutes/rentPayments.js"
-import maintenanceRoutes from "./routes/propertyRoutes/maintenance.js"
-import leaseRoutes from "./routes/propertyRoutes/leases.js"
-import expensePropertyRoutes from "./routes/propertyRoutes/expensesProperties.js"
-import notificationRoutes from "./routes/propertyRoutes/notifications.js"
-import paymentVoucherRoutes from "./routes/propertyRoutes/paymentVouchers.js"
-import processedStatementsRoutes from "./routes/propertyRoutes/processedStatements.js"
-import statementRoutes from "./routes/propertyRoutes/statements.js"
-import ledgerDiagnosticsRoutes from "./routes/propertyRoutes/ledgerDiagnostics.js"
-import landlordPaymentRoutes from "./routes/propertyRoutes/landlordPayments.js"
-import DashboardRoutes from "./controllers/propertyController/dashboard.js"
+import landlordRoutes from "./routes/propertyRoutes/landlords.js";
+import unitRoutes from "./routes/propertyRoutes/units.js";  
+import tenantRoutes from "./routes/propertyRoutes/tenants.js";
+import rentPaymentRoutes from "./routes/propertyRoutes/rentPayments.js";
+import maintenanceRoutes from "./routes/propertyRoutes/maintenance.js";
+import leaseRoutes from "./routes/propertyRoutes/leases.js";
+import expensePropertyRoutes from "./routes/propertyRoutes/expensesProperties.js";
+import ledgerDiagnosticsRoutes from "./routes/propertyRoutes/ledgerDiagnostics.js";
+import landlordPaymentRoutes from "./routes/propertyRoutes/landlordPayments.js";
+import notificationRoutes from "./routes/propertyRoutes/notifications.js";
+import utilityRoutes from "./routes/propertyRoutes/utilities.js";
+import DashboardRoutes from "./controllers/propertyController/dashboard.js";
+import propertyRoutes from "./routes/propertyRoutes/properties.js";
+import http from "http";
+import cors from "cors";
 import companyRoutes from "./routes/companies.js";
 import companySettingsRoutes from "./routes/companySettings.js";
-// Import your Sale model
+import trialRoutes from './routes/trial.js';
+dotenv.config();
+const app = express();
+app.use(express.json());
+// Debug: Print admin credentials loaded from dotenv
+console.log('DOTENV ADMIN DEBUG:', {
+  MILIK_ADMIN_EMAIL: process.env.MILIK_ADMIN_EMAIL,
+  MILIK_ADMIN_PASSWORD: process.env.MILIK_ADMIN_PASSWORD,
+  MILIK_ADMIN_NAME: process.env.MILIK_ADMIN_NAME
+});
+const server = http.createServer(app);
 
-import ngrok from '@ngrok/ngrok';
-import { log } from "console";
-
-// In your server.js, add with other routes
-
-
-
-
-const startServer = async () => {
-  const server = http.createServer(app);
-  
-  // Set server timeout (2 minutes)
-  server.timeout = 120000;
-  server.keepAliveTimeout = 65000;
-  server.headersTimeout = 66000;
-  
-  // Enhanced CORS configuration
+// Define allowed origins for CORS
 const allowedOrigins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "https://milik-system.vercel.app",
-    "https://milik.com",
-    
+  "http://localhost:5173",
+  "https://betterbiz.netlify.app",
+  "https://biznafitty.com",
+  "https://sandbox.safaricom.co.ke",
+  "https://gloriouspalacehotel.co.ke",
+  "https://pup-enhanced-killdeer.ngrok-free.app"
 ];
 
-const isAllowedLocalhostOrigin = (origin) => {
-        if (!origin) return false;
-        return /^http:\/\/localhost:\d+$/.test(origin);
-};
+function isAllowedLocalhostOrigin(origin) {
+  // Allow all localhost ports for development
+  return /^http:\/\/localhost:\d+$/.test(origin);
+}
 
-// CORS middleware
+// Apply CORS globally before any routes
 app.use(cors({
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        
-        if (allowedOrigins.indexOf(origin) === -1 && !isAllowedLocalhostOrigin(origin)) {
-            const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-            return callback(new Error(msg), false);
-        }
-        return callback(null, true);
-    },
-    credentials: true,
-    exposedHeaders: ["Authorization"],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-    optionsSuccessStatus: 204
-}));
-
-// Explicitly handle OPTIONS preflight requests
-app.options('*', cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin) || isAllowedLocalhostOrigin(origin)) {
-            return callback(null, true);
-        }
-        return callback(new Error(`The CORS policy for this site does not allow access from the specified Origin: ${origin}`), false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Additional headers middleware
-app.use((req, res, next) => {
-    // Set CORS headers for all responses
-    const origin = req.headers.origin;
-    if (origin && (allowedOrigins.includes(origin) || isAllowedLocalhostOrigin(origin))) {
-        res.header('Access-Control-Allow-Origin', origin);
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || isAllowedLocalhostOrigin(origin)) {
+      return callback(null, true);
     }
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    
-    next();
-});
+    return callback(new Error(`The CORS policy for this site does not allow access from the specified Origin: ${origin}`), false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
+}));
 
-  // Initialize Socket.IO
+// Initialize Socket.IO
  const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {
@@ -129,7 +76,6 @@ app.use((req, res, next) => {
                 allowedOrigins.includes(origin) ||
                 isAllowedLocalhostOrigin(origin) ||
                 [
-                    "https://betterbiz.netlify.app",
                     "https://biznafitty.com",
                     "https://sandbox.safaricom.co.ke",
                     "https://gloriouspalacehotel.co.ke",
@@ -240,34 +186,26 @@ app.get('/api', (req, res) => {
 // Endpoints to access API
 
 // Apply strict rate limiting to authentication endpoints
+
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', userRoutes);
-
 app.use("/api/printers", printerRoute);
-
-//property management routes
-app.use("/api/landlords", landlordRoutes)
-app.use("/api/properties", propertyRoutes)
-app.use("/api/utilities", utilityRoutes)
-app.use("/api/units", unitRoutes)
-app.use("/api/tenants", tenantRoutes)
-app.use("/api/rent-payments", rentPaymentRoutes)
-app.use("/api/maintenances", maintenanceRoutes)
-app.use("/api/leases", leaseRoutes)
-app.use("/api/propertyexpenses", expensePropertyRoutes)
-app.use("/api/payment-vouchers", paymentVoucherRoutes)
-app.use("/api/processed-statements", processedStatementsRoutes)
-app.use("/api/statements", statementRoutes)
-app.use("/api/ledger", ledgerDiagnosticsRoutes)
-app.use("/api/landlord-payments", landlordPaymentRoutes)
-app.use("/api/notifications", notificationRoutes)
-app.use("/api/dashboard", DashboardRoutes)
+app.use("/api/landlords", landlordRoutes);
+app.use("/api/properties", propertyRoutes);
+app.use("/api/utilities", utilityRoutes);
+app.use("/api/units", unitRoutes);
+app.use("/api/tenants", tenantRoutes);
+app.use("/api/rent-payments", rentPaymentRoutes);
+app.use("/api/maintenances", maintenanceRoutes);
+app.use("/api/leases", leaseRoutes);
+app.use("/api/propertyexpenses", expensePropertyRoutes);
+app.use("/api/ledger", ledgerDiagnosticsRoutes);
+app.use("/api/landlord-payments", landlordPaymentRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/dashboard", DashboardRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/company-settings', companySettingsRoutes);
-
-
-
-
+app.use('/api/trial', trialRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -290,27 +228,11 @@ app.use((err, req, res, next) => {
     }
 };
 
-console.log("Auto-deploy test successful! - " + new Date());
-
-  try {
-    await connect(); // MongoDB connection
-    
-    // Start the server on configured port
-    const PORT = process.env.PORT || 8800;
-    server.listen(PORT, () => {
-      console.log(`✅ MILIK API Server running on port ${PORT}`);
-      console.log(`📡 Health check: http://localhost:${PORT}/health`);
-      console.log(`📚 API info: http://localhost:${PORT}/api`);
-    });
-
-  } catch (error) {
-    console.error("Server startup failed:", error);
-    process.exit(1);
-  }
-};
-
-startServer();
-// Connecting to MongoDB
+// Start the server on port 8800
+const PORT = process.env.PORT || 8800;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 
 

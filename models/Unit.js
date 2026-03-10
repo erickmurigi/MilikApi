@@ -44,6 +44,7 @@ const UnitSchema = new mongoose.Schema(
     nextPaymentDate: { type: Date },
     images: [{ type: String }],
     description: { type: String },
+    areaSqFt: { type: Number, default: 0 }, // Area in square feet
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }
   },
   { timestamps: true }

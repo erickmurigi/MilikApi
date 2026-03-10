@@ -56,7 +56,7 @@ const resolveLedgerCategory = (payment) => {
 };
 
 const resolveLedgerDirection = (payment) => {
-    if (payment?.ledgerType === "invoices") return "debit";
+    // Only receipts should be stored here
     return "credit";
 };
 
@@ -193,8 +193,10 @@ export const createPayment = async (req, res, next) => {
             receiptNumber = await generateReceiptNumber(businessId);
         }
         
+        // Only allow receipts, not invoices
         const newPayment = new RentPayment({
             ...req.body,
+            ledgerType: "receipts",
             referenceNumber: refNumber,
             receiptNumber: receiptNumber,
             bankingDate: req.body?.bankingDate || req.body?.paymentDate,
@@ -209,9 +211,8 @@ export const createPayment = async (req, res, next) => {
             await updateTenantBalance(savedPayment);
         }
 
-        // Auto-post to immutable ledger for confirmed receipts and all invoice bookings.
-        const shouldPostToLedger = savedPayment.isConfirmed || savedPayment.ledgerType === "invoices";
-        if (shouldPostToLedger) {
+        // Auto-post to immutable ledger for confirmed receipts only
+        if (savedPayment.isConfirmed) {
             try {
                 const actorId = req.user?._id || req.user?.id;
                 if (actorId) {

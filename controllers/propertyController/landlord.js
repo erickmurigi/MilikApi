@@ -42,10 +42,14 @@ export const createLandlord = async(req, res, next) => {
             ? req.user._id
             : undefined;
 
+        // Always sync idNumber and regId
+        const regIdValue = req.body.regId?.trim();
+        const idNumberValue = req.body.idNumber?.trim() || regIdValue;
         const newLandlord = new Landlord({
             ...req.body,
             landlordCode,
-            idNumber: req.body.regId?.trim(),
+            regId: regIdValue,
+            idNumber: idNumberValue,
             company: companyId,
             createdBy: createdById
         });

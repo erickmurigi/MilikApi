@@ -34,6 +34,14 @@ export const loginUser = async (req, res, next) => {
 
     // System admin login (only if credentials are configured)
     const adminCreds = getAdminCredentials();
+    // Debug log for troubleshooting admin login
+    console.log("ADMIN LOGIN DEBUG:", {
+      receivedEmail: normalizedEmail,
+      receivedPassword: password,
+      envEmail: adminCreds.email,
+      envPassword: adminCreds.password,
+      envName: adminCreds.name
+    });
     if (adminCreds.email && adminCreds.password && 
         normalizedEmail === adminCreds.email && password === adminCreds.password) {
       const token = jwt.sign(
