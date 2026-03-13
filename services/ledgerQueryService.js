@@ -1,17 +1,11 @@
 import mongoose from "mongoose";
 import FinancialLedgerEntry from "../models/FinancialLedgerEntry.js";
 
-/**
- * Helper: Convert input to Date, with fallback
- */
 const toDate = (value, fallback) => {
   const date = value ? new Date(value) : new Date(fallback);
   return Number.isNaN(date.getTime()) ? new Date(fallback) : date;
 };
 
-/**
- * Helper: Convert string to ObjectId if valid, otherwise return raw value
- */
 const toObjectIdOrRaw = (value) => {
   if (!value) return value;
   if (typeof value === "string" && mongoose.Types.ObjectId.isValid(value)) {
@@ -20,25 +14,15 @@ const toObjectIdOrRaw = (value) => {
   return value;
 };
 
-/**
- * Base filter: Only approved entries are included in ledger reads.
- * Reversal entries (also approved) naturally cancel original entries through opposite amounts.
- * Draft, reversed, and void entries are excluded.
- */
-const BASE_STATUS_FILTER = { status: "approved" };
+const BASE_STATUS_FILTER = {
+  status: "approved",
+  "metadata.includeInLandlordStatement": { $ne: false },
+};
 
-/**
- * Aggregation expression equivalent to FinancialLedgerEntry.signedAmount virtual field.
- * Returns negative amount for debits, positive amount for credits.
- */
 const signedAmountExpr = {
   $cond: [{ $eq: ["$direction", "debit"] }, { $multiply: [-1, "$amount"] }, "$amount"],
 };
 
-/**
- * Get all approved ledger entries for a specific landlord statement period.
- * Includes reversal entries which naturally cancel original entries through opposite amounts.
- */
 export const getEntriesForStatement = async (propertyId, landlordId, periodStart, periodEnd) => {
   const start = toDate(periodStart, new Date(0));
   const end = toDate(periodEnd, new Date());
@@ -56,10 +40,6 @@ export const getEntriesForStatement = async (propertyId, landlordId, periodStart
     .lean();
 };
 
-/**
- * Get totals grouped by category for approved ledger entries.
- * Uses signedAmount logic (debit = negative, credit = positive) via aggregation expression.
- */
 export const getLedgerTotalsByCategory = async (filters = {}) => {
   const match = {
     ...BASE_STATUS_FILTER,
@@ -122,10 +102,6 @@ export const getLedgerTotalsByCategory = async (filters = {}) => {
   };
 };
 
-/**
- * Calculate opening balance for a landlord as of a specific date.
- * Sums all approved entries before the date using signedAmount logic.
- */
 export const getOpeningBalance = async (propertyId, landlordId, date) => {
   const asOfDate = toDate(date, new Date());
 
@@ -149,11 +125,6 @@ export const getOpeningBalance = async (propertyId, landlordId, date) => {
   return Number(result?.openingBalance || 0);
 };
 
-/**
- * Get comprehensive ledger summary for a property across all landlords.
- * Includes opening balances, period activity by category, and closing balances.
- * Uses signedAmount logic throughout.
- */
 export const getLedgerSummaryForProperty = async (propertyId, periodStart, periodEnd) => {
   const start = toDate(periodStart, new Date(0));
   const end = toDate(periodEnd, new Date());
@@ -223,7 +194,8 @@ export const getLedgerSummaryForProperty = async (propertyId, periodStart, perio
     };
 
     acc[landlordKey].periodNet += Number(row.totalAmount || 0);
-    acc[landlordKey].closingBalance = acc[landlordKey].openingBalance + acc[landlordKey].periodNet;
+    acc[landlordKey].closingBalance =
+      acc[landlordKey].openingBalance + acc[landlordKey].periodNet;
 
     return acc;
   }, {});

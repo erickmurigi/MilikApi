@@ -31,7 +31,8 @@ export const verifyToken = (req, res, next) => {
 // Must be logged in (no further checks)
 export const verifyUser = (req, res, next) => {
   verifyToken(req, res, next);
-};
+    console.log('VERIFYUSER: Incoming request:', req.method, req.originalUrl, 'Headers:', req.headers);
+  };
 
 // Admin only (adminAccess OR superAdminAccess)
 export const verifyAdmin = (req, res, next) => {

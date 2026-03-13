@@ -1,8 +1,5 @@
-    // Optional: Track running balance for this account
-    balance: {
-      type: Number,
-      default: 0,
-    },
+// ...existing code...
+// Add balance field inside FinancialLedgerEntrySchema definition
 import mongoose from "mongoose";
 
 const LEDGER_CATEGORIES = [

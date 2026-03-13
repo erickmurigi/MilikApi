@@ -236,6 +236,42 @@ export const logoutUser = async (req, res) => {
   }
 };
 
+// ========== SWITCH COMPANY ========== 
+export const switchCompany = async (req, res, next) => {
+  try {
+    const { companyId } = req.body;
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    user.company = companyId;
+    await user.save();
+
+    // Create new token with updated company
+    const token = jwt.sign(
+      {
+        id: user._id,
+        email: user.email,
+        company: companyId,
+        profile: user.profile,
+        superAdminAccess: user.superAdminAccess,
+        adminAccess: user.adminAccess,
+      },
+      getJWTSecret(),
+      { expiresIn: "7d" }
+    );
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: { ...user._doc, company: companyId },
+      message: "Company switched successfully"
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ========== CREATE INITIAL SUPER ADMIN ==========
 export const createSuperAdmin = async (req, res, next) => {
   return next(createError(410, "Super admin creation is disabled. Use embedded Milik admin credentials to login."));

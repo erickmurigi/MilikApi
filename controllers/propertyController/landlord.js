@@ -1,4 +1,4 @@
-// controllers/landlordController.js
+
 import mongoose from "mongoose";
 import Landlord from "../../models/Landlord.js";
 import Property from "../../models/Property.js";
