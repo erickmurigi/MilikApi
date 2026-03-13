@@ -4,7 +4,8 @@ import Tenant from "../../models/Tenant.js";
 import User from "../../models/User.js";
 import ChartOfAccount from "../../models/ChartOfAccount.js";
 import RentPayment from "../../models/RentPayment.js";
-import { postEntry } from "../../services/ledgerPostingService.js";
+import FinancialLedgerEntry from "../../models/FinancialLedgerEntry.js";
+import { postEntry, postReversal } from "../../services/ledgerPostingService.js";
 import { aggregateChartOfAccountBalances } from "../../services/chartAccountAggregationService.js";
 import { ensureSystemChartOfAccounts } from "../../services/chartOfAccountsService.js";
 
@@ -405,6 +406,93 @@ export const createTenantInvoice = async (req, res) => {
     console.error("TenantInvoice creation error:", error);
     return res.status(500).json({
       error: `Failed to create invoice. ${error.message}`,
+    });
+  }
+};
+
+export const deleteTenantInvoice = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(String(id || ""))) {
+      return res.status(400).json({
+        error: "Invalid invoice id.",
+      });
+    }
+
+    const invoice = await TenantInvoice.findById(id);
+
+    if (!invoice) {
+      return res.status(404).json({
+        error: "Invoice not found.",
+      });
+    }
+
+    if (["paid", "partially_paid"].includes(String(invoice.status || "").toLowerCase())) {
+      return res.status(400).json({
+        error: "Paid or partially paid invoices cannot be deleted. Reverse receipts first.",
+      });
+    }
+
+    let actorUserId;
+    try {
+      actorUserId = await resolveActorUserId({
+        req,
+        business: invoice.business,
+        bodyCreatedBy: invoice.createdBy,
+      });
+    } catch (actorError) {
+      return res.status(400).json({
+        error: actorError.message,
+      });
+    }
+
+    const originalEntries = await FinancialLedgerEntry.find({
+      business: invoice.business,
+      sourceTransactionType: "invoice",
+      sourceTransactionId: String(invoice._id),
+      status: "approved",
+      category: { $ne: "REVERSAL" },
+    });
+
+    const touchedAccountIds = new Set();
+
+    for (const entry of originalEntries) {
+      if (entry?.accountId) {
+        touchedAccountIds.add(String(entry.accountId));
+      }
+
+      if (!entry.reversedByEntry && entry.status !== "reversed") {
+        const reversal = await postReversal({
+          entryId: entry._id,
+          reason: `Invoice ${invoice.invoiceNumber} deleted`,
+          userId: actorUserId,
+        });
+
+        if (reversal?.reversalEntry?.accountId) {
+          touchedAccountIds.add(String(reversal.reversalEntry.accountId));
+        }
+      }
+    }
+
+    await TenantInvoice.findByIdAndDelete(invoice._id);
+
+    await recomputeTenantBalance(invoice.tenant, invoice.business);
+
+    if (touchedAccountIds.size > 0) {
+      await aggregateChartOfAccountBalances(invoice.business, Array.from(touchedAccountIds));
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Invoice deleted and ledger reversed successfully.",
+      deletedInvoiceId: invoice._id,
+      invoiceNumber: invoice.invoiceNumber,
+    });
+  } catch (error) {
+    console.error("Delete tenant invoice error:", error);
+    return res.status(500).json({
+      error: `Failed to delete invoice. ${error.message}`,
     });
   }
 };

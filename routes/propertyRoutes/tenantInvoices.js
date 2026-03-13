@@ -1,6 +1,9 @@
 import express from "express";
 import { verifyUser } from "../../controllers/verifyToken.js";
-import { createTenantInvoice } from "../../controllers/propertyController/tenantInvoices.js";
+import {
+  createTenantInvoice,
+  deleteTenantInvoice,
+} from "../../controllers/propertyController/tenantInvoices.js";
 import TenantInvoice from "../../models/TenantInvoice.js";
 
 const router = express.Router();
@@ -15,6 +18,8 @@ router.post(
   verifyUser,
   createTenantInvoice
 );
+
+router.delete("/:id", verifyUser, deleteTenantInvoice);
 
 // Get tenant invoices
 // Supports:

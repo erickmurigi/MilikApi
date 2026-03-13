@@ -457,9 +457,12 @@ export const createPayment = async (req, res, next) => {
     if (savedPayment.isConfirmed) {
       const actorId = req.user?._id || req.user?.id;
       try {
-        await postReceiptJournal(savedPayment, actorId);
+        const posting = await postReceiptJournal(savedPayment, actorId);
         await recomputeTenantBalance(savedPayment.tenant, savedPayment.business);
-        await aggregateChartOfAccountBalances();
+        await aggregateChartOfAccountBalances(
+          savedPayment.business,
+          posting.entries.map((entry) => entry.accountId)
+        );
       } catch (postingError) {
         await RentPayment.findByIdAndUpdate(savedPayment._id, {
           $set: {
@@ -614,9 +617,12 @@ export const confirmPayment = async (req, res, next) => {
 
     try {
       const actorId = req.user?._id || req.user?.id || confirmedBy;
-      await postReceiptJournal(existingPayment, actorId);
+      const posting = await postReceiptJournal(existingPayment, actorId);
       await recomputeTenantBalance(existingPayment.tenant, existingPayment.business);
-      await aggregateChartOfAccountBalances();
+      await aggregateChartOfAccountBalances(
+        existingPayment.business,
+        posting.entries.map((entry) => entry.accountId)
+      );
     } catch (postingError) {
       existingPayment.isConfirmed = false;
       existingPayment.confirmedBy = null;
@@ -817,7 +823,7 @@ export const reversePayment = async (req, res, next) => {
     const reversalEntry = await new RentPayment(reversalPayload).save();
 
     try {
-      await reverseAllLedgerEntriesForPayment(payment, reversedBy, reason);
+      const reversalEntries = await reverseAllLedgerEntriesForPayment(payment, reversedBy, reason);
 
       payment.isReversed = true;
       payment.reversedAt = new Date();
@@ -832,7 +838,14 @@ export const reversePayment = async (req, res, next) => {
       await reversalEntry.save();
 
       await recomputeTenantBalance(payment.tenant, payment.business);
-      await aggregateChartOfAccountBalances();
+
+      const touchedAccountIds = reversalEntries
+        .map((entry) => entry?.accountId)
+        .filter(Boolean);
+
+      if (touchedAccountIds.length > 0) {
+        await aggregateChartOfAccountBalances(payment.business, touchedAccountIds);
+      }
     } catch (reversalError) {
       reversalEntry.isCancelled = true;
       reversalEntry.cancelledAt = new Date();
