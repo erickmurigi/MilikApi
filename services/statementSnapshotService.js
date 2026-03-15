@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import LandlordStatement from "../models/LandlordStatement.js";
 import LandlordStatementLine from "../models/LandlordStatementLine.js";
 import { generateLandlordStatement } from "./landlordStatementService.js";
@@ -110,7 +111,7 @@ export const createDraftStatement = async ({
     metadata: {
       generatedBy: userId,
       entryCount: statementData.entries.length,
-      ...(statementData.metadata || {}),
+      workspace: statementData.metadata || {},
     },
   });
 
@@ -237,10 +238,10 @@ export const refreshDraftStatement = async (statementId, userId, notes = "") => 
   }
   draft.metadata = {
     ...(draft.metadata || {}),
-    ...(statementData.metadata || {}),
     refreshedBy: userId,
     refreshedAt: new Date(),
     entryCount: statementData.entries.length,
+    workspace: statementData.metadata || {},
   };
 
   await draft.save();
@@ -282,7 +283,7 @@ export const approveStatement = async (statementId, userId, approvalNotes = "") 
   // Update statement status to approved
   statement.status = "approved";
   statement.approvedAt = new Date();
-  statement.approvedBy = userId;
+  statement.approvedBy = mongoose.Types.ObjectId.isValid(String(userId || "")) ? userId : null;
   if (approvalNotes) {
     statement.notes = statement.notes ? `${statement.notes}\n\nApproval: ${approvalNotes}` : approvalNotes;
   }

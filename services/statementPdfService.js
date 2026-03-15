@@ -1,691 +1,142 @@
-/**
- * statementPdfService.js
- * 
- * PDF generation service for landlord statements.
- * 
- * CRITICAL RULE: This service generates PDFs ONLY from immutable statement snapshots.
- * It NEVER recomputes values from the ledger.
- * 
- * Data sources:
- * - LandlordStatement (header with totals)
- * - LandlordStatementLine (frozen transaction lines)
- * 
- * This ensures the PDF exactly matches the approved/sent snapshot.
- * 
- * PERFORMANCE OPTIMIZATION:
- * - Uses a single reusable Puppeteer browser instance
- * - Each PDF generation creates a new page from the shared browser
- * - Pages are closed after rendering, but the browser persists
- * - Reduces Chrome process overhead and improves throughput
- */
-
 import puppeteer from "puppeteer";
 import LandlordStatement from "../models/LandlordStatement.js";
 import LandlordStatementLine from "../models/LandlordStatementLine.js";
 
-/**
- * Global browser instance
- * Initialized on first use and reused for all subsequent PDF generations
- */
 let globalBrowser = null;
-
-/**
- * Initialization flag to prevent race conditions during browser startup
- */
 let browserInitializing = false;
 
-/**
- * Generate a PDF for a landlord statement.
- * 
- * @param {string} statementId - The statement ID
- * @param {string} businessId - The business ID (for isolation)
- * @returns {Promise<Buffer>} PDF buffer
- */
-export const generateStatementPdf = async (statementId, businessId) => {
-  try {
-    // 1. Fetch LandlordStatement with business isolation
-    const statement = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    })
-      .populate("property", "name address city postalCode")
-      .populate("landlord", "firstName lastName email phone")
-      .populate("business", "companyName email phone address")
-      .lean();
+const formatCurrency = (value) => new Intl.NumberFormat("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value || 0));
+const formatDate = (value) => value ? new Date(value).toLocaleDateString("en-GB") : "";
+const esc = (value = "") => String(value || "").replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
-    if (!statement) {
-      throw new Error("Statement not found or access denied");
+const buildRowsFromLines = (lines = []) => {
+  const map = new Map();
+  const getRow = (line) => {
+    const tenant = line.tenant || {};
+    const unit = line.unit || {};
+    const key = `${unit._id || line.unit || ''}:${tenant._id || line.tenant || ''}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        unit: unit.unitNumber || unit.name || line?.metadata?.unit || "-",
+        accountNo: tenant.tenantCode || line?.metadata?.tenantCode || "-",
+        tenantName: tenant.name || line?.metadata?.tenantName || "VACANT",
+        perMonth: Number(line?.metadata?.perMonth || 0),
+        balanceBF: 0,
+        invoicedRent: 0,
+        invoicedGarbage: 0,
+        invoicedWater: 0,
+        paidRent: 0,
+        paidGarbage: 0,
+        paidWater: 0,
+        balanceCF: 0,
+      });
     }
-
-    // Only approved or sent statements can be converted to PDF
-    if (statement.status !== "approved" && statement.status !== "sent") {
-      throw new Error(`Cannot generate PDF for statement with status: ${statement.status}. Only approved or sent statements can be printed.`);
-    }
-
-    // 2. Fetch LandlordStatementLine sorted by lineNumber ASC
-    const lines = await LandlordStatementLine.find({
-      statement: statementId,
-      business: businessId,
-    })
-      .sort({ lineNumber: 1 })
-      .lean();
-
-    // 3. Build HTML template
-    const html = buildStatementHtml(statement, lines);
-
-    // 4. Convert HTML to PDF using puppeteer
-    const pdfBuffer = await convertHtmlToPdf(html);
-
-    return pdfBuffer;
-  } catch (error) {
-    console.error("Error generating statement PDF:", error);
-    throw error;
-  }
-};
-
-/**
- * Build HTML template for landlord statement.
- * 
- * @param {Object} statement - LandlordStatement document
- * @param {Array} lines - Array of LandlordStatementLine documents
- * @returns {string} HTML string
- */
-const buildStatementHtml = (statement, lines) => {
-  const propertyName = statement.property?.name || "N/A";
-  const propertyAddress = formatPropertyAddress(statement.property);
-  const landlordName = formatLandlordName(statement.landlord);
-  const landlordContact = formatLandlordContact(statement.landlord);
-  const companyName = statement.business?.companyName || "Property Management";
-  const companyContact = formatCompanyContact(statement.business);
-
-  const statementNumber = statement.statementNumber || "N/A";
-  const periodStart = formatDate(statement.periodStart);
-  const periodEnd = formatDate(statement.periodEnd);
-  const currency = statement.currency || "KES";
-  const version = statement.version > 1 ? `v${statement.version}` : "";
-
-  const openingBalance = formatCurrency(statement.openingBalance, currency);
-  const periodNet = formatCurrency(statement.periodNet, currency);
-  const closingBalance = formatCurrency(statement.closingBalance, currency);
-
-  const transactionRows = lines.map((line) => {
-    const date = formatDate(line.transactionDate);
-    const description = escapeHtml(line.description || "");
-    const category = escapeHtml(line.category || "");
-    const debit = line.direction === "debit" ? formatCurrency(line.amount, currency) : "";
-    const credit = line.direction === "credit" ? formatCurrency(line.amount, currency) : "";
-    const runningBalance = formatCurrency(line.runningBalance, currency);
-
-    return `
-      <tr>
-        <td>${date}</td>
-        <td>${description}</td>
-        <td>${category}</td>
-        <td class="amount">${debit}</td>
-        <td class="amount">${credit}</td>
-        <td class="amount">${runningBalance}</td>
-      </tr>
-    `;
-  }).join("");
-
-  const statusBadge = getStatusBadge(statement.status);
-  const approvedInfo = statement.approvedAt 
-    ? `<p><strong>Approved:</strong> ${formatDateTime(statement.approvedAt)}</p>` 
-    : "";
-  const sentInfo = statement.sentAt 
-    ? `<p><strong>Sent:</strong> ${formatDateTime(statement.sentAt)}</p>` 
-    : "";
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Landlord Statement - ${statementNumber}</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      font-size: 10pt;
-      color: #333;
-      padding: 20px;
-    }
-    
-    .header {
-      border-bottom: 3px solid #2c3e50;
-      padding-bottom: 15px;
-      margin-bottom: 20px;
-      display: flex;
-      justify-content: space-between;
-    }
-    
-    .company-info {
-      flex: 1;
-    }
-    
-    .company-info h1 {
-      font-size: 18pt;
-      color: #2c3e50;
-      margin-bottom: 5px;
-    }
-    
-    .company-info p {
-      font-size: 9pt;
-      color: #666;
-      line-height: 1.4;
-    }
-    
-    .statement-info {
-      text-align: right;
-      flex: 1;
-    }
-    
-    .statement-info h2 {
-      font-size: 14pt;
-      color: #2c3e50;
-      margin-bottom: 8px;
-    }
-    
-    .statement-info p {
-      font-size: 9pt;
-      margin: 3px 0;
-    }
-    
-    .status-badge {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 8pt;
-      font-weight: bold;
-      text-transform: uppercase;
-      margin-top: 5px;
-    }
-    
-    .status-approved {
-      background-color: #27ae60;
-      color: white;
-    }
-    
-    .status-sent {
-      background-color: #3498db;
-      color: white;
-    }
-    
-    .parties {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 25px;
-      gap: 20px;
-    }
-    
-    .party-box {
-      flex: 1;
-      background-color: #f8f9fa;
-      padding: 15px;
-      border-radius: 5px;
-      border-left: 4px solid #2c3e50;
-    }
-    
-    .party-box h3 {
-      font-size: 11pt;
-      color: #2c3e50;
-      margin-bottom: 8px;
-      border-bottom: 1px solid #ddd;
-      padding-bottom: 5px;
-    }
-    
-    .party-box p {
-      font-size: 9pt;
-      line-height: 1.5;
-      margin: 3px 0;
-    }
-    
-    .summary {
-      background-color: #ecf0f1;
-      padding: 15px;
-      margin-bottom: 25px;
-      border-radius: 5px;
-    }
-    
-    .summary h3 {
-      font-size: 12pt;
-      color: #2c3e50;
-      margin-bottom: 10px;
-    }
-    
-    .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 15px;
-    }
-    
-    .summary-item {
-      text-align: center;
-    }
-    
-    .summary-label {
-      font-size: 9pt;
-      color: #666;
-      margin-bottom: 5px;
-    }
-    
-    .summary-value {
-      font-size: 14pt;
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    
-    .transactions {
-      margin-bottom: 20px;
-    }
-    
-    .transactions h3 {
-      font-size: 12pt;
-      color: #2c3e50;
-      margin-bottom: 10px;
-      border-bottom: 2px solid #2c3e50;
-      padding-bottom: 5px;
-    }
-    
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 20px;
-    }
-    
-    th {
-      background-color: #34495e;
-      color: white;
-      padding: 10px 8px;
-      text-align: left;
-      font-size: 9pt;
-      font-weight: 600;
-      border: 1px solid #2c3e50;
-    }
-    
-    td {
-      padding: 8px;
-      border: 1px solid #ddd;
-      font-size: 9pt;
-    }
-    
-    tr:nth-child(even) {
-      background-color: #f8f9fa;
-    }
-    
-    .amount {
-      text-align: right;
-      font-family: 'Courier New', monospace;
-    }
-    
-    .footer {
-      margin-top: 30px;
-      padding-top: 15px;
-      border-top: 2px solid #95a5a6;
-      font-size: 8pt;
-      color: #7f8c8d;
-      text-align: center;
-    }
-    
-    .audit-info {
-      margin-top: 20px;
-      padding: 10px;
-      background-color: #f8f9fa;
-      border-left: 4px solid #95a5a6;
-      font-size: 8pt;
-      color: #666;
-    }
-    
-    @media print {
-      body {
-        padding: 0;
-      }
-      
-      .party-box {
-        page-break-inside: avoid;
-      }
-      
-      table {
-        page-break-inside: auto;
-      }
-      
-      tr {
-        page-break-inside: avoid;
-        page-break-after: auto;
-      }
-      
-      thead {
-        display: table-header-group;
-      }
-    }
-  </style>
-</head>
-<body>
-  <!-- Header -->
-  <div class="header">
-    <div class="company-info">
-      <h1>${escapeHtml(companyName)}</h1>
-      ${companyContact}
-    </div>
-    <div class="statement-info">
-      <h2>LANDLORD STATEMENT ${version}</h2>
-      <p><strong>Statement #:</strong> ${escapeHtml(statementNumber)}</p>
-      <p><strong>Period:</strong> ${periodStart} - ${periodEnd}</p>
-      <p><strong>Currency:</strong> ${currency}</p>
-      ${statusBadge}
-    </div>
-  </div>
-  
-  <!-- Parties -->
-  <div class="parties">
-    <div class="party-box">
-      <h3>Property</h3>
-      <p><strong>${escapeHtml(propertyName)}</strong></p>
-      ${propertyAddress}
-    </div>
-    <div class="party-box">
-      <h3>Landlord</h3>
-      <p><strong>${escapeHtml(landlordName)}</strong></p>
-      ${landlordContact}
-    </div>
-  </div>
-  
-  <!-- Summary -->
-  <div class="summary">
-    <h3>Statement Summary</h3>
-    <div class="summary-grid">
-      <div class="summary-item">
-        <div class="summary-label">Opening Balance</div>
-        <div class="summary-value">${openingBalance}</div>
-      </div>
-      <div class="summary-item">
-        <div class="summary-label">Period Net</div>
-        <div class="summary-value">${periodNet}</div>
-      </div>
-      <div class="summary-item">
-        <div class="summary-label">Closing Balance</div>
-        <div class="summary-value">${closingBalance}</div>
-      </div>
-    </div>
-  </div>
-  
-  <!-- Transactions -->
-  <div class="transactions">
-    <h3>Transactions</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Description</th>
-          <th>Category</th>
-          <th>Debit</th>
-          <th>Credit</th>
-          <th>Balance</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${transactionRows || '<tr><td colspan="6" style="text-align:center;">No transactions in this period</td></tr>'}
-      </tbody>
-    </table>
-  </div>
-  
-  <!-- Audit Info -->
-  <div class="audit-info">
-    <p><strong>Statement ID:</strong> ${statement._id}</p>
-    <p><strong>Version:</strong> ${statement.version}</p>
-    <p><strong>Line Count:</strong> ${statement.lineCount || 0}</p>
-    <p><strong>Ledger Entries:</strong> ${statement.ledgerEntryCount || 0}</p>
-    ${approvedInfo}
-    ${sentInfo}
-  </div>
-  
-  <!-- Footer -->
-  <div class="footer">
-    <p>This statement is an immutable snapshot. All amounts are in ${currency}.</p>
-    <p>Generated on ${formatDateTime(new Date())}</p>
-  </div>
-</body>
-</html>
-  `;
-};
-
-/**
- * Convert HTML to PDF using puppeteer.
- * Uses a reusable browser instance for performance.
- * 
- * @param {string} html - HTML string
- * @returns {Promise<Buffer>} PDF buffer
- */
-const convertHtmlToPdf = async (html) => {
-  let page = null;
-
-  try {
-    // Get the shared browser instance
-    const browser = await getBrowser();
-
-    // Create a new page for this PDF
-    page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-
-    // Generate PDF from the page
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '20px',
-        right: '20px',
-        bottom: '20px',
-        left: '20px',
-      },
-    });
-
-    return pdfBuffer;
-  } catch (error) {
-    console.error("Error converting HTML to PDF:", error);
-    throw new Error("Failed to generate PDF");
-  } finally {
-    // Close the page but keep the browser alive
-    if (page) {
-      try {
-        await page.close();
-      } catch (err) {
-        console.error("Error closing page:", err);
-      }
-    }
-  }
-};
-
-/**
- * Get or initialize the Puppeteer browser instance.
- * Implements lazy initialization with race condition protection.
- * 
- * @returns {Promise<Browser>} Puppeteer browser instance
- */
-const getBrowser = async () => {
-  // Return existing browser if already initialized
-  if (globalBrowser) {
-    return globalBrowser;
-  }
-
-  // Prevent multiple concurrent initialization attempts
-  if (browserInitializing) {
-    // Wait for initialization to complete
-    let attempts = 0;
-    while (browserInitializing && attempts < 100) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      attempts++;
-    }
-    if (globalBrowser) {
-      return globalBrowser;
-    }
-  }
-
-  try {
-    browserInitializing = true;
-
-    console.log("Initializing Puppeteer browser instance...");
-
-    // Launch browser with headless mode and sandbox disabled for compatibility
-    globalBrowser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', // Use temp space instead of /dev/shm
-      ],
-    });
-
-    console.log("Puppeteer browser instance initialized");
-
-    return globalBrowser;
-  } catch (error) {
-    console.error("Error initializing Puppeteer browser:", error);
-    globalBrowser = null;
-    throw new Error("Failed to initialize PDF generation service");
-  } finally {
-    browserInitializing = false;
-  }
-};
-
-/**
- * Close the global browser instance gracefully.
- * Call this on application shutdown.
- */
-const closeBrowser = async () => {
-  if (globalBrowser) {
-    try {
-      console.log("Closing Puppeteer browser instance...");
-      await globalBrowser.close();
-      globalBrowser = null;
-      console.log("Puppeteer browser closed successfully");
-    } catch (error) {
-      console.error("Error closing Puppeteer browser:", error);
-    }
-  }
-};
-
-/**
- * Register process shutdown handlers for graceful browser cleanup.
- * Ensures Chrome processes are properly terminated on exit.
- */
-const registerShutdownHandlers = () => {
-  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-
-  signals.forEach((signal) => {
-    process.on(signal, async () => {
-      console.log(`\nReceived ${signal}, closing resources...`);
-      await closeBrowser();
-      process.exit(0);
-    });
-  });
-
-  // Handle uncaught exceptions
-  process.on('uncaughtException', async (error) => {
-    console.error('Uncaught exception:', error);
-    await closeBrowser();
-    process.exit(1);
-  });
-
-  // Handle unhandled promise rejections
-  process.on('unhandledRejection', async (reason, promise) => {
-    console.error('Unhandled rejection at:', promise, 'reason:', reason);
-    await closeBrowser();
-    process.exit(1);
-  });
-};
-
-// Register shutdown handlers when service is imported
-registerShutdownHandlers();
-
-/**
- * Helper functions for formatting
- */
-
-const formatDate = (date) => {
-  if (!date) return "N/A";
-  const d = new Date(date);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-};
-
-const formatDateTime = (date) => {
-  if (!date) return "N/A";
-  const d = new Date(date);
-  return d.toLocaleString('en-GB', { 
-    day: '2-digit', 
-    month: 'short', 
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-};
-
-const formatCurrency = (amount, currency = "KES") => {
-  if (amount === null || amount === undefined) return "-";
-  const formatted = Math.abs(amount).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  const sign = amount < 0 ? '-' : '';
-  return `${sign}${currency} ${formatted}`;
-};
-
-const formatLandlordName = (landlord) => {
-  if (!landlord) return "N/A";
-  return `${landlord.firstName || ""} ${landlord.lastName || ""}`.trim() || "N/A";
-};
-
-const formatLandlordContact = (landlord) => {
-  if (!landlord) return "<p>N/A</p>";
-  const parts = [];
-  if (landlord.email) parts.push(`<p>Email: ${escapeHtml(landlord.email)}</p>`);
-  if (landlord.phone) parts.push(`<p>Phone: ${escapeHtml(landlord.phone)}</p>`);
-  return parts.length > 0 ? parts.join("") : "<p>No contact information</p>";
-};
-
-const formatPropertyAddress = (property) => {
-  if (!property) return "<p>N/A</p>";
-  const parts = [];
-  if (property.address) parts.push(property.address);
-  if (property.city) parts.push(property.city);
-  if (property.postalCode) parts.push(property.postalCode);
-  const addressStr = parts.join(", ");
-  return addressStr ? `<p>${escapeHtml(addressStr)}</p>` : "<p>No address available</p>";
-};
-
-const formatCompanyContact = (business) => {
-  if (!business) return "<p>N/A</p>";
-  const parts = [];
-  if (business.email) parts.push(`<p>Email: ${escapeHtml(business.email)}</p>`);
-  if (business.phone) parts.push(`<p>Phone: ${escapeHtml(business.phone)}</p>`);
-  if (business.address) parts.push(`<p>${escapeHtml(business.address)}</p>`);
-  return parts.length > 0 ? parts.join("") : "<p>No contact information</p>";
-};
-
-const escapeHtml = (text) => {
-  if (!text) return "";
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-};
-
-const getStatusBadge = (status) => {
-  const statusMap = {
-    approved: '<span class="status-badge status-approved">Approved</span>',
-    sent: '<span class="status-badge status-sent">Sent</span>',
+    return map.get(key);
   };
-  return statusMap[status] || '';
+  for (const line of lines) {
+    const row = getRow(line);
+    const amt = Number(line.amount || 0);
+    const cat = String(line.category || "").toUpperCase();
+    if (cat === "RENT_CHARGE") row.invoicedRent += amt;
+    else if (cat === "UTILITY_CHARGE") {
+      const hint = `${line.description || ''} ${line.metadata?.expenseCategory || ''}`.toLowerCase();
+      if (/water/.test(hint)) row.invoicedWater += amt;
+      else row.invoicedGarbage += amt;
+    } else if (cat === "RENT_RECEIPT_MANAGER" || cat === "RENT_RECEIPT_LANDLORD") row.paidRent += amt;
+    else if (cat === "UTILITY_RECEIPT_MANAGER" || cat === "UTILITY_RECEIPT_LANDLORD") {
+      const hint = `${line.description || ''}`.toLowerCase();
+      if (/water/.test(hint)) row.paidWater += amt;
+      else row.paidGarbage += amt;
+    }
+  }
+  return Array.from(map.values()).map((r) => ({ ...r, balanceCF: r.balanceBF + r.invoicedRent + r.invoicedGarbage + r.invoicedWater - r.paidRent - r.paidGarbage - r.paidWater }));
 };
 
-export default {
-  generateStatementPdf,
-  closeBrowser,
-  getBrowser,
+async function getBrowser() {
+  if (globalBrowser) return globalBrowser;
+  if (browserInitializing) {
+    while (!globalBrowser) await new Promise((r) => setTimeout(r, 100));
+    return globalBrowser;
+  }
+  browserInitializing = true;
+  globalBrowser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  browserInitializing = false;
+  return globalBrowser;
+}
+
+export const generateStatementPdf = async (statementId, businessId) => {
+  const statement = await LandlordStatement.findOne({ _id: statementId, business: businessId })
+    .populate("property", "propertyCode propertyName name address city commissionPercentage commissionRecognitionBasis totalUnits")
+    .populate("landlord", "firstName lastName landlordName email phone phoneNumber")
+    .populate("business", "companyName name address phone email")
+    .lean();
+
+  if (!statement) throw new Error("Statement not found or access denied");
+
+  const lines = await LandlordStatementLine.find({ statement: statementId, business: businessId })
+    .populate("tenant", "name tenantCode")
+    .populate("unit", "unitNumber name")
+    .sort({ lineNumber: 1 })
+    .lean();
+
+  const workspace = statement.metadata?.workspace || {};
+  const tenantRows = Array.isArray(workspace.tenantRows) && workspace.tenantRows.length > 0
+    ? workspace.tenantRows
+    : buildRowsFromLines(lines);
+  const expenseRows = [
+    ...(Array.isArray(workspace.expenses) ? workspace.expenses : []),
+    ...(Array.isArray(workspace.directLandlordReceipts) ? workspace.directLandlordReceipts : []),
+  ];
+  const summary = workspace.summary || {};
+
+  const companyName = statement.business?.companyName || statement.business?.name || "MILIK SYSTEM";
+  const companyAddress = statement.business?.address || "";
+  const companyPhone = statement.business?.phone || "";
+  const companyEmail = statement.business?.email || "";
+  const landlordName = [statement.landlord?.firstName, statement.landlord?.lastName].filter(Boolean).join(" ") || statement.landlord?.landlordName || "Landlord";
+  const propertyName = statement.property?.propertyName || statement.property?.name || "Property";
+  const propertyCode = statement.property?.propertyCode || "";
+
+  const totals = {
+    perMonth: tenantRows.reduce((s, r) => s + Number(r.perMonth || 0), 0),
+    bf: tenantRows.reduce((s, r) => s + Number(r.balanceBF || 0), 0),
+    invRent: tenantRows.reduce((s, r) => s + Number(r.invoicedRent || 0), 0),
+    invGarbage: tenantRows.reduce((s, r) => s + Number(r.invoicedGarbage || 0), 0),
+    invWater: tenantRows.reduce((s, r) => s + Number(r.invoicedWater || 0), 0),
+    paidRent: tenantRows.reduce((s, r) => s + Number(r.paidRent || 0), 0),
+    paidGarbage: tenantRows.reduce((s, r) => s + Number(r.paidGarbage || 0), 0),
+    paidWater: tenantRows.reduce((s, r) => s + Number(r.paidWater || 0), 0),
+    cf: tenantRows.reduce((s, r) => s + Number(r.balanceCF || 0), 0),
+  };
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8" />
+<style>
+body{font-family:Arial,sans-serif;font-size:10px;color:#111;margin:0;padding:12px}
+.header{text-align:center;border-bottom:2px solid #0B3B2E;padding-bottom:8px;margin-bottom:10px}
+.header h1{margin:0;font-size:18px}.meta{font-size:11px;line-height:1.4}.title{text-align:center;font-weight:700;text-decoration:underline;margin:10px 0 8px}
+.top{display:flex;justify-content:space-between;margin:6px 0 10px}.top .left div,.top .right div{margin:2px 0}
+table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #555;padding:3px 4px}th{background:#eef2f7}.group{background:#dfe8f2;font-weight:700;text-align:center}.right{text-align:right}.center{text-align:center}.totals td{font-weight:700;background:#f5f7fa}.section{margin-top:14px}.summarybox{margin-top:14px;display:flex;justify-content:flex-end}.summarybox table{width:320px}
+</style></head><body>
+<div class="header"><h1>${esc(companyName)}</h1><div class="meta">${esc(companyAddress)}<br/>TEL: ${esc(companyPhone)}<br/>EMAIL: ${esc(companyEmail)}</div></div>
+<div class="title">PROPERTY ACCOUNT STATEMENT - ${String(statement.notes || '').toLowerCase().includes('final') ? 'FINAL' : 'PROVISIONAL'}</div>
+<div class="top"><div class="left"><div><strong>LANDLORD</strong> ${esc(landlordName)}</div><div><strong>PROPERTY</strong> ${esc(`[${propertyCode}] ${propertyName}`)}</div></div><div class="right"><div><strong>STATEMENT PERIOD</strong> ${esc(new Date(statement.periodStart).toLocaleString('default',{month:'long'}))} - ${new Date(statement.periodStart).getFullYear()}</div><div><strong>${formatDate(statement.periodStart)} - ${formatDate(statement.periodEnd)}</strong></div></div></div>
+<table>
+<thead>
+<tr><th rowspan="2">UNIT</th><th rowspan="2">A/C NO.</th><th rowspan="2">TENANT/RESIDENT</th><th rowspan="2">PER MONTH</th><th rowspan="2">BALANCE B/F<br/>TOTAL B/F</th><th class="group" colspan="3">AMOUNT INVOICED</th><th class="group" colspan="3">AMOUNT PAID</th><th rowspan="2">BALANCE C/F</th></tr>
+<tr><th>RENT</th><th>GARBAGE</th><th>WATER</th><th>RENT</th><th>GARBAGE</th><th>WATER</th></tr>
+</thead><tbody>
+${tenantRows.map((r)=>`<tr><td>${esc(r.unit)}</td><td>${esc(r.accountNo)}</td><td>${esc(r.tenantName)}</td><td class="right">${formatCurrency(r.perMonth)}</td><td class="right">${formatCurrency(r.balanceBF)}</td><td class="right">${formatCurrency(r.invoicedRent)}</td><td class="right">${formatCurrency(r.invoicedGarbage)}</td><td class="right">${formatCurrency(r.invoicedWater)}</td><td class="right">${formatCurrency(r.paidRent)}</td><td class="right">${formatCurrency(r.paidGarbage)}</td><td class="right">${formatCurrency(r.paidWater)}</td><td class="right">${formatCurrency(r.balanceCF)}</td></tr>`).join('')}
+<tr class="totals"><td colspan="3"></td><td class="right">${formatCurrency(totals.perMonth)}</td><td class="right">${formatCurrency(totals.bf)}</td><td class="right">${formatCurrency(totals.invRent)}</td><td class="right">${formatCurrency(totals.invGarbage)}</td><td class="right">${formatCurrency(totals.invWater)}</td><td class="right">${formatCurrency(totals.paidRent)}</td><td class="right">${formatCurrency(totals.paidGarbage)}</td><td class="right">${formatCurrency(totals.paidWater)}</td><td class="right">${formatCurrency(totals.cf)}</td></tr>
+</tbody></table>
+<div class="section"><div style="font-weight:700;margin-bottom:4px">EXPENSES & DEDUCTIONS</div><table><thead><tr><th>Date</th><th>Description</th><th class="right">Amount</th></tr></thead><tbody>${expenseRows.length?expenseRows.map((e)=>`<tr><td>${formatDate(e.date)}</td><td>${esc(e.description)}</td><td class="right">${formatCurrency(e.amount)}</td></tr>`).join(''):'<tr><td colspan="3" class="center">No expenses or deductions posted in this period</td></tr>'}<tr class="totals"><td colspan="2">TOTAL</td><td class="right">${formatCurrency(expenseRows.reduce((s,e)=>s+Number(e.amount||0),0))}</td></tr></tbody></table></div>
+<div class="summarybox"><table><tbody><tr><th>MANAGER COLLECTIONS</th><td class="right">${formatCurrency(summary.managerCollections || 0)}</td></tr><tr><th>COMMISSION</th><td class="right">${formatCurrency(summary.commissionAmount || 0)}</td></tr><tr><th>TOTAL DEDUCTIONS</th><td class="right">${formatCurrency(summary.totalDeductions || 0)}</td></tr><tr><th>NET PAYABLE TO LANDLORD</th><td class="right">${formatCurrency(summary.netRemittance || 0)}</td></tr></tbody></table></div>
+</body></html>`;
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  const pdf = await page.pdf({ format: "A4", printBackground: true, margin: { top: "12mm", bottom: "12mm", left: "8mm", right: "8mm" } });
+  await page.close();
+  return pdf;
 };
