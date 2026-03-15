@@ -1,5 +1,6 @@
 import LandlordStatement from "../../models/LandlordStatement.js";
 import LandlordStatementLine from "../../models/LandlordStatementLine.js";
+import Property from "../../models/Property.js";
 import {
   createDraftStatement,
   refreshDraftStatement,
@@ -11,15 +12,55 @@ import {
 import { generateStatementPdf } from "../../services/statementPdfService.js";
 import { emitToCompany } from "../../utils/socketManager.js";
 
+const getUserId = (req) => req.user?._id || req.user?.id || null;
+const isSystemAdmin = (req) => Boolean(req.user?.isSystemAdmin || req.user?.superAdminAccess);
+
+const resolveBusinessId = async (req, fallbackPropertyId = null) => {
+  if (req.user?.company) return req.user.company;
+  if (req.body?.businessId) return req.body.businessId;
+  if (req.query?.businessId) return req.query.businessId;
+
+  const propertyId = fallbackPropertyId || req.body?.propertyId || req.query?.propertyId || null;
+  if (!propertyId) return null;
+
+  const property = await Property.findById(propertyId).select("business").lean();
+  return property?.business || null;
+};
+
+const resolveLandlordIdFromProperty = async (propertyId) => {
+  if (!propertyId) return null;
+  const property = await Property.findById(propertyId).select("landlords").lean();
+  if (!property?.landlords?.length) return null;
+  const primary = property.landlords.find((l) => l?.isPrimary && l?.landlordId);
+  return primary?.landlordId || property.landlords.find((l) => l?.landlordId)?.landlordId || null;
+};
+
+const buildStatementScope = (req, businessId) => {
+  if (isSystemAdmin(req)) {
+    return businessId ? { business: businessId } : {};
+  }
+  return { business: businessId };
+};
+
+const findStatementForAccess = async (req, statementId, businessId = null) => {
+  const scope = buildStatementScope(req, businessId);
+  return LandlordStatement.findOne({ _id: statementId, ...scope });
+};
+
 /**
  * Create a draft statement from ledger data.
- * If a draft already exists for the same period/landlord, returns the existing draft.
+ * If a draft already exists for this period, refreshes and returns it.
  */
 export const createDraft = async (req, res, next) => {
   try {
-    const { propertyId, landlordId, periodStart, periodEnd, notes } = req.body;
-    const businessId = req.user.company;
-    const userId = req.user?._id || req.user?.id;
+    const { propertyId, periodStart, periodEnd, notes } = req.body;
+    let { landlordId } = req.body;
+    const userId = getUserId(req);
+    const businessId = await resolveBusinessId(req, propertyId);
+
+    if (!landlordId) {
+      landlordId = await resolveLandlordIdFromProperty(propertyId);
+    }
 
     if (!propertyId || !landlordId || !periodStart || !periodEnd) {
       return res.status(400).json({
@@ -28,7 +69,13 @@ export const createDraft = async (req, res, next) => {
       });
     }
 
-    // Check if draft already exists for this period
+    if (!businessId || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Unable to resolve business or user context for statement creation",
+      });
+    }
+
     const existingDraft = await LandlordStatement.findOne({
       business: businessId,
       property: propertyId,
@@ -39,7 +86,6 @@ export const createDraft = async (req, res, next) => {
     });
 
     if (existingDraft) {
-      // Refresh existing draft from latest immutable ledger entries.
       const refreshed = await refreshDraftStatement(existingDraft._id, userId, notes || "");
       const lines = await LandlordStatementLine.find({ statement: existingDraft._id })
         .sort({ lineNumber: 1 })
@@ -58,7 +104,6 @@ export const createDraft = async (req, res, next) => {
       });
     }
 
-    // Create new draft
     const result = await createDraftStatement({
       businessId,
       propertyId,
@@ -75,7 +120,7 @@ export const createDraft = async (req, res, next) => {
       propertyId,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Draft statement created successfully",
       data: {
@@ -89,41 +134,24 @@ export const createDraft = async (req, res, next) => {
   }
 };
 
-/**
- * Approve a draft statement, freezing it as immutable.
- */
 export const approve = async (req, res, next) => {
   try {
     const { statementId } = req.params;
     const { approvalNotes } = req.body;
-    const userId = req.user?._id || req.user?.id;
-    const businessId = req.user.company;
+    const userId = getUserId(req);
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statement = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
+    const statement = await findStatementForAccess(req, statementId, businessId);
     if (!statement) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
     if (statement.status === "approved" || statement.status === "sent") {
-      return res.status(400).json({
-        success: false,
-        message: "Statement is already approved or sent",
-      });
+      return res.status(400).json({ success: false, message: "Statement is already approved or sent" });
     }
 
     if (statement.status === "revised") {
@@ -133,10 +161,9 @@ export const approve = async (req, res, next) => {
       });
     }
 
-    // Safeguard: Prevent approval of empty statements
     const lineCount = await LandlordStatementLine.countDocuments({
       statement: statementId,
-      business: businessId,
+      ...(statement.business ? { business: statement.business } : {}),
     });
 
     if (lineCount === 0) {
@@ -146,9 +173,8 @@ export const approve = async (req, res, next) => {
       });
     }
 
-    // Safeguard: Prevent multiple approved statements for the same period
     const existingApproved = await LandlordStatement.findOne({
-      business: businessId,
+      business: statement.business,
       property: statement.property,
       landlord: statement.landlord,
       periodStart: statement.periodStart,
@@ -168,16 +194,15 @@ export const approve = async (req, res, next) => {
       });
     }
 
-    // Approve statement (freezes statement and lines)
     const result = await approveStatement(statementId, userId, approvalNotes || "");
 
-    emitToCompany(businessId, "statement:approved", {
+    emitToCompany(String(statement.business), "statement:approved", {
       statementId: result.statement._id,
       landlordId: result.statement.landlord,
       propertyId: result.statement.property,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Statement approved and frozen successfully",
       data: {
@@ -191,34 +216,19 @@ export const approve = async (req, res, next) => {
   }
 };
 
-/**
- * Get a single statement by ID with its lines.
- * Always uses frozen snapshot data, never regenerates from ledger.
- */
 export const getStatement = async (req, res, next) => {
   try {
     const { statementId } = req.params;
     const { includeLines = "true", populateRefs = "true" } = req.query;
-    const businessId = req.user.company;
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statementCheck = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
+    const statementCheck = await findStatementForAccess(req, statementId, businessId);
     if (!statementCheck) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
     const result = await getStatementById(statementId, {
@@ -226,7 +236,7 @@ export const getStatement = async (req, res, next) => {
       populateRefs: populateRefs === "true",
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         statement: result.statement,
@@ -239,66 +249,49 @@ export const getStatement = async (req, res, next) => {
   }
 };
 
-/**
- * List statements for a landlord with filtering.
- * Returns snapshot headers only (lines fetched separately via getStatement).
- */
 export const listStatementsForLandlord = async (req, res, next) => {
   try {
-    const {
-      propertyId,
-      landlordId,
-      periodStart,
-      periodEnd,
-      status,
-      page = 1,
-      limit = 20,
-    } = req.query;
-
-    const businessId = req.user.company;
+    const { propertyId, landlordId, periodStart, periodEnd, status, page = 1, limit = 20 } = req.query;
+    const businessId = await resolveBusinessId(req, propertyId);
 
     if (!landlordId) {
-      return res.status(400).json({
-        success: false,
-        message: "landlordId is required",
-      });
+      return res.status(400).json({ success: false, message: "landlordId is required" });
     }
 
     const filter = {
-      business: businessId,
+      ...buildStatementScope(req, businessId),
       landlord: landlordId,
     };
 
     if (propertyId) filter.property = propertyId;
     if (status) filter.status = status;
-
     if (periodStart || periodEnd) {
       filter.periodStart = {};
       if (periodStart) filter.periodStart.$gte = new Date(periodStart);
       if (periodEnd) filter.periodStart.$lte = new Date(periodEnd);
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const statements = await LandlordStatement.find(filter)
       .sort({ periodStart: -1, version: -1 })
       .skip(skip)
-      .limit(parseInt(limit))
+      .limit(parseInt(limit, 10))
       .populate("property", "name propertyName address city")
-      .populate("landlord", "firstName lastName email phone")
+      .populate("landlord", "firstName lastName email phone landlordName")
       .populate("approvedBy", "surname otherNames email")
       .lean();
 
     const total = await LandlordStatement.countDocuments(filter);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         statements,
         pagination: {
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / parseInt(limit)),
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          totalPages: Math.ceil(total / parseInt(limit, 10)),
         },
       },
     });
@@ -307,47 +300,32 @@ export const listStatementsForLandlord = async (req, res, next) => {
   }
 };
 
-/**
- * Create a revision of an approved/sent statement.
- * Marks original as "revised" and creates new draft version.
- */
 export const createStatementRevision = async (req, res, next) => {
   try {
     const { statementId } = req.params;
     const { revisionReason } = req.body;
-    const userId = req.user?._id || req.user?.id;
-    const businessId = req.user.company;
+    const userId = getUserId(req);
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId || !revisionReason) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId and revisionReason are required",
-      });
+      return res.status(400).json({ success: false, message: "statementId and revisionReason are required" });
     }
 
-    // Enforce business isolation
-    const statementCheck = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
+    const statementCheck = await findStatementForAccess(req, statementId, businessId);
     if (!statementCheck) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
     const result = await createRevision(statementId, userId, revisionReason);
 
-    emitToCompany(businessId, "statement:revised", {
+    emitToCompany(String(result.statement.business || businessId), "statement:revised", {
       originalStatementId: result.originalStatement._id,
       newStatementId: result.statement._id,
       landlordId: result.statement.landlord,
       propertyId: result.statement.property,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Statement revision created successfully",
       data: {
@@ -361,40 +339,23 @@ export const createStatementRevision = async (req, res, next) => {
   }
 };
 
-/**
- * Mark an approved statement as sent (for tracking purposes).
- */
 export const markAsSent = async (req, res, next) => {
   try {
     const { statementId } = req.params;
-    const userId = req.user?._id || req.user?.id;
-    const businessId = req.user.company;
+    const userId = getUserId(req);
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statement = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
+    const statement = await findStatementForAccess(req, statementId, businessId);
     if (!statement) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
     if (statement.status !== "approved") {
-      return res.status(400).json({
-        success: false,
-        message: "Only approved statements can be marked as sent",
-      });
+      return res.status(400).json({ success: false, message: "Only approved statements can be marked as sent" });
     }
 
     statement.status = "sent";
@@ -402,64 +363,40 @@ export const markAsSent = async (req, res, next) => {
     statement.sentBy = userId;
     await statement.save();
 
-    emitToCompany(businessId, "statement:sent", {
+    emitToCompany(String(statement.business), "statement:sent", {
       statementId: statement._id,
       landlordId: statement.landlord,
       propertyId: statement.property,
     });
 
-    res.status(200).json({
-      success: true,
-      message: "Statement marked as sent",
-      data: { statement },
-    });
+    return res.status(200).json({ success: true, message: "Statement marked as sent", data: { statement } });
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Delete a draft statement (only drafts can be deleted).
- */
 export const deleteDraft = async (req, res, next) => {
   try {
     const { statementId } = req.params;
-    const businessId = req.user.company;
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statement = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
+    const statement = await findStatementForAccess(req, statementId, businessId);
     if (!statement) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
     if (statement.status !== "draft") {
-      return res.status(400).json({
-        success: false,
-        message: "Only draft statements can be deleted",
-      });
+      return res.status(400).json({ success: false, message: "Only draft statements can be deleted" });
     }
 
-    // Safeguard: Protect draft deletion in revision chains
-    // Check if this statement is referenced in any revision chain
     const referencedAsSupersedes = await LandlordStatement.findOne({
-      business: businessId,
+      business: statement.business,
       supersededByStatementId: statementId,
     });
-
     if (referencedAsSupersedes) {
       return res.status(400).json({
         success: false,
@@ -472,10 +409,9 @@ export const deleteDraft = async (req, res, next) => {
     }
 
     const referencedAsOriginal = await LandlordStatement.findOne({
-      business: businessId,
+      business: statement.business,
       supersedesStatementId: statementId,
     });
-
     if (referencedAsOriginal) {
       return res.status(400).json({
         success: false,
@@ -487,183 +423,98 @@ export const deleteDraft = async (req, res, next) => {
       });
     }
 
-    // Delete associated lines first
-    await LandlordStatementLine.deleteMany({
-      statement: statementId,
-      business: businessId,
-    });
+    await LandlordStatementLine.deleteMany({ statement: statementId, ...(statement.business ? { business: statement.business } : {}) });
+    await LandlordStatement.findOneAndDelete({ _id: statementId, ...(statement.business ? { business: statement.business } : {}) });
 
-    // Delete statement header
-    await LandlordStatement.findOneAndDelete({
-      _id: statementId,
-      business: businessId,
-    });
-
-    emitToCompany(businessId, "statement:deleted", {
+    emitToCompany(String(statement.business), "statement:deleted", {
       statementId,
       landlordId: statement.landlord,
       propertyId: statement.property,
     });
 
-    res.status(200).json({
-      success: true,
-      message: "Draft statement deleted successfully",
-    });
+    return res.status(200).json({ success: true, message: "Draft statement deleted successfully" });
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Validate statement audit integrity.
- * Checks that header counts match actual frozen lines.
- */
 export const validateAudit = async (req, res, next) => {
   try {
     const { statementId } = req.params;
-    const businessId = req.user.company;
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statementCheck = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    });
-
-    if (!statementCheck) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+    const statement = await findStatementForAccess(req, statementId, businessId);
+    if (!statement) {
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
-    const result = await validateStatementAudit(statementId);
-
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
+    const validation = await validateStatementAudit(statementId);
+    return res.status(200).json({ success: true, data: validation });
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Generate and download PDF for an approved/sent statement.
- * Uses immutable statement snapshot only - never regenerates from ledger.
- */
 export const generatePdf = async (req, res, next) => {
   try {
     const { statementId } = req.params;
-    const businessId = req.user.company;
+    const businessId = await resolveBusinessId(req);
 
     if (!statementId) {
-      return res.status(400).json({
-        success: false,
-        message: "statementId is required",
-      });
+      return res.status(400).json({ success: false, message: "statementId is required" });
     }
 
-    // Enforce business isolation
-    const statement = await LandlordStatement.findOne({
-      _id: statementId,
-      business: businessId,
-    }).lean();
-
+    const statement = await findStatementForAccess(req, statementId, businessId);
     if (!statement) {
-      return res.status(404).json({
-        success: false,
-        message: "Statement not found or access denied",
-      });
+      return res.status(404).json({ success: false, message: "Statement not found or access denied" });
     }
 
-    // Generate PDF from immutable snapshot
-    const pdfBuffer = await generateStatementPdf(statementId, businessId);
-
-    // Set response headers for PDF download
-    const filename = `Statement_${statement.statementNumber}_${statement.landlord}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', pdfBuffer.length);
-
-    res.send(pdfBuffer);
+    const pdfBuffer = await generateStatementPdf(statementId);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename=${statement.statementNumber}.pdf`);
+    return res.send(pdfBuffer);
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Get statement summary statistics for a property/landlord.
- */
 export const getStatementSummary = async (req, res, next) => {
   try {
-    const { propertyId, landlordId, year } = req.query;
-    const businessId = req.user.company;
+    const { landlordId, propertyId, year } = req.query;
+    const businessId = await resolveBusinessId(req, propertyId);
 
     if (!landlordId) {
-      return res.status(400).json({
-        success: false,
-        message: "landlordId is required",
-      });
+      return res.status(400).json({ success: false, message: "landlordId is required" });
     }
 
     const filter = {
-      business: businessId,
+      ...buildStatementScope(req, businessId),
       landlord: landlordId,
     };
 
     if (propertyId) filter.property = propertyId;
     if (year) {
-      const yearInt = parseInt(year);
-      filter.periodStart = {
-        $gte: new Date(yearInt, 0, 1),
-        $lt: new Date(yearInt + 1, 0, 1),
-      };
+      const start = new Date(Number(year), 0, 1);
+      const end = new Date(Number(year), 11, 31, 23, 59, 59, 999);
+      filter.periodStart = { $gte: start, $lte: end };
     }
 
     const statements = await LandlordStatement.find(filter).lean();
-
     const summary = {
-      total: statements.length,
-      byStatus: {
-        draft: statements.filter((s) => s.status === "draft").length,
-        reviewed: statements.filter((s) => s.status === "reviewed").length,
-        approved: statements.filter((s) => s.status === "approved").length,
-        sent: statements.filter((s) => s.status === "sent").length,
-        revised: statements.filter((s) => s.status === "revised").length,
-      },
-      totalOpeningBalance: statements.reduce((sum, s) => sum + (s.openingBalance || 0), 0),
-      totalPeriodNet: statements.reduce((sum, s) => sum + (s.periodNet || 0), 0),
-      totalClosingBalance: statements.reduce((sum, s) => sum + (s.closingBalance || 0), 0),
-      latestStatement: statements.sort((a, b) => 
-        new Date(b.periodStart).getTime() - new Date(a.periodStart).getTime()
-      )[0] || null,
+      totalStatements: statements.length,
+      draftCount: statements.filter((s) => s.status === "draft").length,
+      approvedCount: statements.filter((s) => s.status === "approved").length,
+      sentCount: statements.filter((s) => s.status === "sent").length,
+      totalNet: statements.reduce((sum, s) => sum + (Number(s.periodNet) || 0), 0),
+      totalClosingBalance: statements.reduce((sum, s) => sum + (Number(s.closingBalance) || 0), 0),
     };
 
-    res.status(200).json({
-      success: true,
-      data: summary,
-    });
+    return res.status(200).json({ success: true, data: summary });
   } catch (err) {
     next(err);
   }
-};
-
-export default {
-  createDraft,
-  approve,
-  getStatement,
-  listStatementsForLandlord,
-  createStatementRevision,
-  markAsSent,
-  deleteDraft,
-  validateAudit,
-  generatePdf,
-  getStatementSummary,
 };

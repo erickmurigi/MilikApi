@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import RentPayment from "../../models/RentPayment.js";
 import Tenant from "../../models/Tenant.js";
 import TenantInvoice from "../../models/TenantInvoice.js";
+import User from "../../models/User.js";
 import Unit from "../../models/Unit.js";
 import Property from "../../models/Property.js";
 import ChartOfAccount from "../../models/ChartOfAccount.js";
@@ -9,6 +10,70 @@ import FinancialLedgerEntry from "../../models/FinancialLedgerEntry.js";
 import { emitToCompany } from "../../utils/socketManager.js";
 import { postEntry, postReversal } from "../../services/ledgerPostingService.js";
 import { aggregateChartOfAccountBalances } from "../../services/chartAccountAggregationService.js";
+
+const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ""));
+
+const populateReceiptQuery = (query) =>
+  query
+    .populate("tenant", "name email phone unit")
+    .populate({ path: "unit", select: "unitNumber property", populate: { path: "property", select: "propertyName propertyCode" } })
+    .populate("confirmedBy", "surname otherNames email")
+    .populate("ledgerEntries");
+
+const resolveBusinessId = (req) => {
+  return (
+    req.user?.company ||
+    req.body?.business ||
+    req.query?.business ||
+    null
+  );
+};
+
+const resolveActorUserId = async ({ req, business, fallbackUserId = null }) => {
+  const candidates = [fallbackUserId, req.user?.id, req.user?._id].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (isValidObjectId(candidate)) {
+      const existingUser = await User.findById(candidate).select("_id company isActive").lean();
+      if (existingUser && existingUser.isActive !== false) {
+        return String(existingUser._id);
+      }
+    }
+  }
+
+  if (!business || !isValidObjectId(business)) {
+    throw new Error("Unable to resolve acting user because business is missing or invalid.");
+  }
+
+  const companyAdmin = await User.findOne({
+    company: business,
+    isActive: true,
+    $or: [{ adminAccess: true }, { superAdminAccess: true }],
+  })
+    .sort({ superAdminAccess: -1, adminAccess: -1, createdAt: 1 })
+    .select("_id company")
+    .lean();
+
+  if (companyAdmin?._id) {
+    return String(companyAdmin._id);
+  }
+
+  const anyActiveCompanyUser = await User.findOne({
+    company: business,
+    isActive: true,
+  })
+    .sort({ createdAt: 1 })
+    .select("_id company")
+    .lean();
+
+  if (anyActiveCompanyUser?._id) {
+    return String(anyActiveCompanyUser._id);
+  }
+
+  throw new Error(
+    "No valid company user could be resolved for receipt posting. Create at least one real user under this company, or submit a valid User ObjectId."
+  );
+};
 
 const normalizeDate = (value, fallback = new Date()) => {
   const date = value ? new Date(value) : new Date(fallback);
@@ -427,15 +492,40 @@ const reverseAllLedgerEntriesForPayment = async (payment, userId, reason) => {
 
 export const createPayment = async (req, res, next) => {
   try {
-    const businessId = req.user.company;
+    const businessId = resolveBusinessId(req);
+    if (!businessId || !isValidObjectId(businessId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid business is required to create a receipt.",
+      });
+    }
+
     const isConfirmedOnCreate = req.body?.isConfirmed === true;
-    const refNumber =
-      req.body?.referenceNumber?.trim() ||
-      `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const refNumber = String(req.body?.referenceNumber || "").trim();
+
+    if (!refNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Reference number is required for tenant receipts.",
+      });
+    }
 
     let receiptNumber = req.body?.receiptNumber?.trim();
     if (!receiptNumber) {
       receiptNumber = await generateReceiptNumber(businessId);
+    }
+
+    let actorUserId = null;
+    if (isConfirmedOnCreate) {
+      try {
+        actorUserId = await resolveActorUserId({
+          req,
+          business: businessId,
+          fallbackUserId: req.body?.confirmedBy || req.body?.createdBy || null,
+        });
+      } catch (actorError) {
+        return res.status(400).json({ success: false, message: actorError.message });
+      }
     }
 
     const payment = new RentPayment({
@@ -447,6 +537,8 @@ export const createPayment = async (req, res, next) => {
       recordDate: req.body?.recordDate || new Date(),
       business: businessId,
       isConfirmed: isConfirmedOnCreate,
+      confirmedBy: isConfirmedOnCreate ? actorUserId : null,
+      confirmedAt: isConfirmedOnCreate ? new Date() : null,
       postingStatus: "unposted",
       postingError: null,
       ledgerEntries: [],
@@ -455,9 +547,8 @@ export const createPayment = async (req, res, next) => {
     const savedPayment = await payment.save();
 
     if (savedPayment.isConfirmed) {
-      const actorId = req.user?._id || req.user?.id;
       try {
-        const posting = await postReceiptJournal(savedPayment, actorId);
+        const posting = await postReceiptJournal(savedPayment, actorUserId);
         await recomputeTenantBalance(savedPayment.tenant, savedPayment.business);
         await aggregateChartOfAccountBalances(
           savedPayment.business,
@@ -514,12 +605,9 @@ export const getPayments = async (req, res, next) => {
     if (paymentType) filter.paymentType = paymentType;
     if (ledger && ledger === "receipts") filter.ledgerType = "receipts";
 
-    const payments = await RentPayment.find(filter)
-      .populate("tenant", "name email phone")
-      .populate("unit", "unitNumber property")
-      .populate("confirmedBy", "surname otherNames email")
-      .populate("ledgerEntries")
-      .sort({ paymentDate: -1, createdAt: -1 });
+    const payments = await populateReceiptQuery(
+      RentPayment.find(filter).sort({ paymentDate: -1, createdAt: -1 })
+    );
 
     return res.status(200).json(payments);
   } catch (err) {
@@ -529,11 +617,7 @@ export const getPayments = async (req, res, next) => {
 
 export const getPayment = async (req, res, next) => {
   try {
-    const payment = await RentPayment.findById(req.params.id)
-      .populate("tenant", "name email phone unit")
-      .populate("unit", "unitNumber property")
-      .populate("confirmedBy", "surname otherNames email")
-      .populate("ledgerEntries");
+    const payment = await populateReceiptQuery(RentPayment.findById(req.params.id));
 
     if (!payment) {
       return res.status(404).json({ message: "Payment not found" });
@@ -559,8 +643,17 @@ export const updatePayment = async (req, res, next) => {
       });
     }
 
+    const referenceNumber = String(req.body?.referenceNumber || payment.referenceNumber || "").trim();
+    if (!referenceNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Reference number is required for tenant receipts.",
+      });
+    }
+
     const safeUpdate = {
       ...req.body,
+      referenceNumber,
       ledgerType: "receipts",
     };
 
@@ -572,15 +665,13 @@ export const updatePayment = async (req, res, next) => {
     delete safeUpdate.reversalEntry;
     delete safeUpdate.reversalOf;
 
-    const updatedPayment = await RentPayment.findByIdAndUpdate(
-      req.params.id,
-      { $set: safeUpdate },
-      { new: true }
-    )
-      .populate("tenant", "name email phone")
-      .populate("unit", "unitNumber property")
-      .populate("confirmedBy", "surname otherNames email")
-      .populate("ledgerEntries");
+    const updatedPayment = await populateReceiptQuery(
+      RentPayment.findByIdAndUpdate(
+        req.params.id,
+        { $set: safeUpdate },
+        { new: true }
+      )
+    );
 
     return res.status(200).json(updatedPayment);
   } catch (err) {
@@ -590,25 +681,30 @@ export const updatePayment = async (req, res, next) => {
 
 export const confirmPayment = async (req, res, next) => {
   try {
-    const confirmedBy = req.body?.confirmedBy || req.user?._id || req.user?.id;
-
     const existingPayment = await RentPayment.findById(req.params.id);
     if (!existingPayment) {
       return res.status(404).json({ message: "Payment not found" });
     }
 
     if (existingPayment.isConfirmed && existingPayment.postingStatus === "posted") {
-      const populated = await RentPayment.findById(existingPayment._id)
-        .populate("tenant", "name email phone")
-        .populate("unit", "unitNumber property")
-        .populate("confirmedBy", "surname otherNames email")
-        .populate("ledgerEntries");
+      const populated = await populateReceiptQuery(RentPayment.findById(existingPayment._id));
 
       return res.status(200).json(populated);
     }
 
+    let actorUserId;
+    try {
+      actorUserId = await resolveActorUserId({
+        req,
+        business: existingPayment.business,
+        fallbackUserId: req.body?.confirmedBy || existingPayment.confirmedBy || null,
+      });
+    } catch (actorError) {
+      return res.status(400).json({ success: false, message: actorError.message });
+    }
+
     existingPayment.isConfirmed = true;
-    existingPayment.confirmedBy = confirmedBy;
+    existingPayment.confirmedBy = actorUserId;
     existingPayment.confirmedAt = new Date();
     existingPayment.postingStatus = "unposted";
     existingPayment.postingError = null;
@@ -616,8 +712,7 @@ export const confirmPayment = async (req, res, next) => {
     await existingPayment.save();
 
     try {
-      const actorId = req.user?._id || req.user?.id || confirmedBy;
-      const posting = await postReceiptJournal(existingPayment, actorId);
+      const posting = await postReceiptJournal(existingPayment, actorUserId);
       await recomputeTenantBalance(existingPayment.tenant, existingPayment.business);
       await aggregateChartOfAccountBalances(
         existingPayment.business,
@@ -786,8 +881,18 @@ export const reversePayment = async (req, res, next) => {
     }
 
     const reason = req.body?.reason || "Receipt reversed";
-    const businessId = payment.business || req.user.company;
-    const reversedBy = req.user?._id || req.user?.id || null;
+    const businessId = payment.business || resolveBusinessId(req);
+
+    let reversedBy;
+    try {
+      reversedBy = await resolveActorUserId({
+        req,
+        business: businessId,
+        fallbackUserId: payment.confirmedBy || payment.createdBy || null,
+      });
+    } catch (actorError) {
+      return res.status(400).json({ success: false, message: actorError.message });
+    }
 
     const reversalReceiptNumber = await generateReceiptNumber(businessId);
     const reversalRef = `REV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;

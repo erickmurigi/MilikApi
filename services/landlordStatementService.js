@@ -4,18 +4,20 @@ import {
   getLedgerTotalsByCategory,
 } from "./ledgerQueryService.js";
 import Property from "../models/Property.js";
+import Unit from "../models/Unit.js";
+import Tenant from "../models/Tenant.js";
+import TenantInvoice from "../models/TenantInvoice.js";
+import RentPayment from "../models/RentPayment.js";
+import ExpenseProperty from "../models/ExpenseProperty.js";
 
 const toAbs = (value) => Math.abs(Number(value || 0));
-
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
+const toDate = (value) => {
+  if (!value) return new Date();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+};
 
-/**
- * Categories typically appearing in landlord statements.
- * Used for organizing statement line items and computing totals.
- * 
- * Note: REVERSAL category is excluded from statement display.
- * Reversal entries still participate in balance calculations but are not shown as line items.
- */
 const STATEMENT_CATEGORIES = [
   "RENT_CHARGE",
   "UTILITY_CHARGE",
@@ -36,34 +38,322 @@ const STATEMENT_CATEGORIES = [
   "WRITE_OFF",
 ];
 
-/**
- * Helper: Convert Date to ISO string or return as-is
- */
-const toDate = (value) => {
-  if (!value) return new Date();
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
+const normalizeId = (value) => {
+  if (!value) return "";
+  if (typeof value === "object") return String(value._id || value.id || "");
+  return String(value);
 };
 
-/**
- * Helper: Compute signed amount from ledger entry (debit = negative, credit = positive)
- */
-const computeSignedAmount = (entry) => {
-  const amount = Math.abs(Number(entry.amount || 0));
-  return entry.direction === "debit" ? -amount : amount;
+const monthName = (date) => date.toLocaleDateString("en-KE", { month: "long" });
+
+const classifyUtilityBucket = (source) => {
+  const text = String(source || "").toLowerCase();
+  if (/water|sewer|borehole/.test(text)) return "water";
+  if (/garbage|refuse|trash|waste|service charge|cleaning/.test(text)) return "garbage";
+  return "garbage";
 };
 
-/**
- * Generate a draft landlord statement from immutable ledger entries.
- * 
- * @param {Object} params - Statement generation parameters
- * @param {string|ObjectId} params.propertyId - Property ID
- * @param {string|ObjectId} params.landlordId - Landlord ID
- * @param {Date|string} params.statementPeriodStart - Period start date
- * @param {Date|string} params.statementPeriodEnd - Period end date
- * 
- * @returns {Promise<Object>} Statement object with opening balance, entries, totals, closing balance
- */
+const getReceiptRentAmount = (payment) => {
+  const breakdownRent = Number(payment?.breakdown?.rent || 0);
+  if (breakdownRent > 0) return breakdownRent;
+  return String(payment?.paymentType || "").toLowerCase() === "rent"
+    ? Number(payment?.amount || 0)
+    : 0;
+};
+
+const getReceiptUtilitySplits = (payment) => {
+  const result = { garbage: 0, water: 0 };
+
+  if (Array.isArray(payment?.breakdown?.utilities) && payment.breakdown.utilities.length > 0) {
+    payment.breakdown.utilities.forEach((item) => {
+      const bucket = classifyUtilityBucket(item?.name || item?.utilityLabel || payment?.description);
+      result[bucket] += Number(item?.amount || 0);
+    });
+    return result;
+  }
+
+  if (String(payment?.paymentType || "").toLowerCase() === "utility") {
+    const bucket = classifyUtilityBucket(payment?.description || payment?.referenceNumber || "utility");
+    result[bucket] += Number(payment?.amount || 0);
+  }
+
+  return result;
+};
+
+const buildScheduleWorkspace = async ({ propertyId, landlordId, periodStart, periodEnd, property }) => {
+  const businessId = property?.business;
+
+  const [units, tenants, invoices, priorInvoices, receipts, priorReceipts, expenses] = await Promise.all([
+    Unit.find({ property: propertyId }).sort({ unitNumber: 1 }).lean(),
+    Tenant.find({ business: businessId, status: { $nin: ["inactive", "moved_out", "evicted"] } })
+      .populate("unit", "unitNumber property rent")
+      .lean(),
+    TenantInvoice.find({
+      business: businessId,
+      property: propertyId,
+      landlord: landlordId,
+      status: { $nin: ["cancelled", "reversed"] },
+      invoiceDate: { $gte: periodStart, $lte: periodEnd },
+    }).lean(),
+    TenantInvoice.find({
+      business: businessId,
+      property: propertyId,
+      landlord: landlordId,
+      status: { $nin: ["cancelled", "reversed"] },
+      invoiceDate: { $lt: periodStart },
+    }).lean(),
+    RentPayment.find({
+      business: businessId,
+      ledgerType: "receipts",
+      isConfirmed: true,
+      isCancelled: { $ne: true },
+      reversalOf: null,
+      paymentDate: { $gte: periodStart, $lte: periodEnd },
+    })
+      .populate({ path: "unit", select: "unitNumber property rent" })
+      .populate("tenant", "name tenantCode idNumber rent")
+      .lean(),
+    RentPayment.find({
+      business: businessId,
+      ledgerType: "receipts",
+      isConfirmed: true,
+      isCancelled: { $ne: true },
+      reversalOf: null,
+      paymentDate: { $lt: periodStart },
+    })
+      .populate({ path: "unit", select: "unitNumber property rent" })
+      .populate("tenant", "name tenantCode idNumber rent")
+      .lean(),
+    ExpenseProperty.find({
+      business: businessId,
+      property: propertyId,
+      date: { $gte: periodStart, $lte: periodEnd },
+    })
+      .sort({ date: 1, createdAt: 1 })
+      .lean(),
+  ]);
+
+  const scopedTenants = tenants.filter(
+    (tenant) => normalizeId(tenant?.unit?.property) === normalizeId(propertyId)
+  );
+
+  const tenantByUnitId = new Map();
+  scopedTenants.forEach((tenant) => {
+    const unitId = normalizeId(tenant?.unit?._id || tenant?.unit);
+    if (!unitId || tenantByUnitId.has(unitId)) return;
+    tenantByUnitId.set(unitId, tenant);
+  });
+
+  const scopedReceipts = receipts.filter(
+    (payment) => normalizeId(payment?.unit?.property) === normalizeId(propertyId)
+  );
+  const scopedPriorReceipts = priorReceipts.filter(
+    (payment) => normalizeId(payment?.unit?.property) === normalizeId(propertyId)
+  );
+
+  const rows = units.map((unit) => {
+    const unitId = normalizeId(unit?._id);
+    const tenant = tenantByUnitId.get(unitId) || null;
+    const tenantId = normalizeId(tenant?._id);
+
+    const row = {
+      unitId,
+      tenantId,
+      unit: unit?.unitNumber || "-",
+      accountNo: tenant?.tenantCode || tenant?.idNumber || "",
+      tenantName: tenant?.name || "VACANT",
+      perMonth: round2(Number(tenant?.rent || unit?.rent || 0)),
+      openingBalance: 0,
+      invoicedRent: 0,
+      invoicedGarbage: 0,
+      invoicedWater: 0,
+      paidRent: 0,
+      paidGarbage: 0,
+      paidWater: 0,
+      closingBalance: 0,
+      paidDirectToLandlord: 0,
+      paidToManager: 0,
+      referenceNumbers: [],
+    };
+
+    const periodInvoices = invoices.filter((inv) => normalizeId(inv?.unit) === unitId);
+    const beforeInvoices = priorInvoices.filter((inv) => normalizeId(inv?.unit) === unitId);
+    const periodReceipts = scopedReceipts.filter((payment) => normalizeId(payment?.unit?._id || payment?.unit) === unitId);
+    const beforeReceipts = scopedPriorReceipts.filter((payment) => normalizeId(payment?.unit?._id || payment?.unit) === unitId);
+
+    beforeInvoices.forEach((invoice) => {
+      row.openingBalance += Number(invoice?.amount || 0);
+    });
+
+    beforeReceipts.forEach((payment) => {
+      row.openingBalance -= Number(payment?.amount || 0);
+    });
+
+    periodInvoices.forEach((invoice) => {
+      const amount = Number(invoice?.amount || 0);
+      if (String(invoice?.category || "").toUpperCase() === "RENT_CHARGE") {
+        row.invoicedRent += amount;
+      } else {
+        const bucket = classifyUtilityBucket(invoice?.description || invoice?.invoiceNumber);
+        if (bucket === "water") row.invoicedWater += amount;
+        else row.invoicedGarbage += amount;
+      }
+    });
+
+    periodReceipts.forEach((payment) => {
+      const rentAmount = getReceiptRentAmount(payment);
+      const utilitySplit = getReceiptUtilitySplits(payment);
+      row.paidRent += rentAmount;
+      row.paidGarbage += Number(utilitySplit.garbage || 0);
+      row.paidWater += Number(utilitySplit.water || 0);
+      const amount = Number(payment?.amount || 0);
+      if (payment?.paidDirectToLandlord) row.paidDirectToLandlord += amount;
+      else row.paidToManager += amount;
+      if (payment?.receiptNumber || payment?.referenceNumber) {
+        row.referenceNumbers.push(payment.receiptNumber || payment.referenceNumber);
+      }
+    });
+
+    row.openingBalance = round2(row.openingBalance);
+    row.invoicedRent = round2(row.invoicedRent);
+    row.invoicedGarbage = round2(row.invoicedGarbage);
+    row.invoicedWater = round2(row.invoicedWater);
+    row.paidRent = round2(row.paidRent);
+    row.paidGarbage = round2(row.paidGarbage);
+    row.paidWater = round2(row.paidWater);
+    row.paidDirectToLandlord = round2(row.paidDirectToLandlord);
+    row.paidToManager = round2(row.paidToManager);
+    row.closingBalance = round2(
+      row.openingBalance + row.invoicedRent + row.invoicedGarbage + row.invoicedWater - row.paidRent - row.paidGarbage - row.paidWater
+    );
+
+    return row;
+  });
+
+  const totals = rows.reduce(
+    (acc, row) => {
+      acc.perMonth += row.perMonth;
+      acc.openingBalance += row.openingBalance;
+      acc.invoicedRent += row.invoicedRent;
+      acc.invoicedGarbage += row.invoicedGarbage;
+      acc.invoicedWater += row.invoicedWater;
+      acc.paidRent += row.paidRent;
+      acc.paidGarbage += row.paidGarbage;
+      acc.paidWater += row.paidWater;
+      acc.closingBalance += row.closingBalance;
+      acc.paidDirectToLandlord += row.paidDirectToLandlord;
+      acc.paidToManager += row.paidToManager;
+      return acc;
+    },
+    {
+      perMonth: 0,
+      openingBalance: 0,
+      invoicedRent: 0,
+      invoicedGarbage: 0,
+      invoicedWater: 0,
+      paidRent: 0,
+      paidGarbage: 0,
+      paidWater: 0,
+      closingBalance: 0,
+      paidDirectToLandlord: 0,
+      paidToManager: 0,
+    }
+  );
+
+  Object.keys(totals).forEach((key) => {
+    totals[key] = round2(totals[key]);
+  });
+
+  const directLandlordExpenseRows = scopedReceipts
+    .filter((payment) => !!payment?.paidDirectToLandlord)
+    .map((payment) => ({
+      date: payment?.paymentDate,
+      description: `Tenant paid landlord directly${payment?.tenant?.name ? ` - ${payment.tenant.name}` : ""}${payment?.receiptNumber || payment?.referenceNumber ? ` (${payment.receiptNumber || payment.referenceNumber})` : ""}`,
+      amount: round2(Number(payment?.amount || 0)),
+      category: "direct_landlord_collection",
+      sourceId: String(payment?._id),
+    }));
+
+  const expenseRows = [
+    ...expenses.map((expense) => ({
+      date: expense?.date,
+      description: expense?.description || expense?.category || "Property expense",
+      amount: round2(Number(expense?.amount || 0)),
+      category: expense?.category || "other",
+      sourceId: String(expense?._id),
+    })),
+    ...directLandlordExpenseRows,
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const commissionPercentage = Number(property?.commissionPercentage || 0);
+  const recognitionBasis = String(property?.commissionRecognitionBasis || "received").toLowerCase();
+  let commissionBase = totals.paidRent + directLandlordExpenseRows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  if (recognitionBasis === "invoiced") commissionBase = totals.invoicedRent;
+  if (recognitionBasis === "received_manager_only") commissionBase = rows.reduce((sum, row) => sum + Number(row.paidToManager || 0), 0);
+  const commissionAmount = round2((commissionBase * commissionPercentage) / 100);
+
+  const hardExpensesTotal = round2(expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+  const directLandlordTotal = round2(directLandlordExpenseRows.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+  const totalDeductions = round2(hardExpensesTotal + directLandlordTotal + commissionAmount);
+  const managerCollections = round2(rows.reduce((sum, row) => sum + Number(row.paidToManager || 0), 0));
+  const netStatement = round2(managerCollections - totalDeductions);
+
+  if (commissionAmount > 0) {
+    expenseRows.push({
+      date: periodEnd,
+      description: `Management commission @ ${commissionPercentage}%`,
+      amount: commissionAmount,
+      category: "commission",
+      sourceId: "commission",
+    });
+  }
+
+  return {
+    periodLabel: `${monthName(periodStart)} ${periodStart.getFullYear()}`,
+    month: periodStart.getMonth() + 1,
+    year: periodStart.getFullYear(),
+    columns: {
+      primary: [
+        "unit",
+        "accountNo",
+        "tenantName",
+        "perMonth",
+        "openingBalance",
+        "invoicedRent",
+        "invoicedGarbage",
+        "invoicedWater",
+        "paidRent",
+        "paidGarbage",
+        "paidWater",
+        "closingBalance",
+      ],
+    },
+    rows,
+    totals,
+    expenseRows,
+    summary: {
+      landlordName:
+        property?.landlords?.find((item) => normalizeId(item?.landlordId) === normalizeId(landlordId))?.name ||
+        "",
+      propertyName: property?.propertyName || property?.name || "",
+      rentInvoiced: round2(totals.invoicedRent + totals.invoicedGarbage + totals.invoicedWater),
+      managerCollections,
+      directToLandlordCollections: directLandlordTotal,
+      propertyExpenses: hardExpensesTotal,
+      commissionPercentage: round2(commissionPercentage),
+      commissionBasis: recognitionBasis,
+      commissionAmount,
+      totalDeductions,
+      netStatement,
+      isNegativeStatement: netStatement < 0,
+      amountPayableByLandlordToManager: netStatement < 0 ? Math.abs(netStatement) : 0,
+      amountPayableToLandlord: netStatement > 0 ? netStatement : 0,
+      occupiedUnits: rows.filter((row) => row.tenantName !== "VACANT").length,
+      vacantUnits: rows.filter((row) => row.tenantName === "VACANT").length,
+    },
+  };
+};
+
 export const generateLandlordStatement = async ({
   propertyId,
   landlordId,
@@ -79,52 +369,15 @@ export const generateLandlordStatement = async ({
   const periodStart = toDate(statementPeriodStart);
   const periodEnd = toDate(statementPeriodEnd);
 
-  // Step 1: Get opening balance (all approved entries before period start)
   const openingBalance = await getOpeningBalance(propertyId, landlordId, periodStart);
-
-  // Step 2: Get all approved ledger entries for the statement period
   const rawEntries = await getEntriesForStatement(propertyId, landlordId, periodStart, periodEnd);
-
-  // Step 3: Sort entries chronologically (transactionDate ASC, createdAt ASC)
   const entries = rawEntries.sort((a, b) => {
     const dateA = new Date(a.transactionDate).getTime();
     const dateB = new Date(b.transactionDate).getTime();
     if (dateA !== dateB) return dateA - dateB;
-    const createdA = new Date(a.createdAt || 0).getTime();
-    const createdB = new Date(b.createdAt || 0).getTime();
-    return createdA - createdB;
+    return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
   });
 
-  // Step 3.5: Fetch all tenants for the property
-  const Tenant = (await import('../models/Tenant.js')).default;
-  const Unit = (await import('../models/Unit.js')).default;
-  const allUnits = await Unit.find({ property: propertyId }).select('_id').lean();
-  const unitIds = allUnits.map(u => u._id);
-  const allTenants = await Tenant.find({ unit: { $in: unitIds }, status: { $in: ['active', 'overdue'] } }).lean();
-
-  // Step 3.6: Ensure every tenant is represented in the statement lines
-  const tenantIdsInLines = new Set(entries.map(e => String(e.tenant?._id || e.tenant || '')));
-  allTenants.forEach(tenant => {
-    const tid = String(tenant._id);
-    if (!tenantIdsInLines.has(tid)) {
-      // Add a placeholder line for this tenant
-      entries.push({
-        tenant: tenant._id,
-        unit: tenant.unit,
-        amount: 0,
-        direction: 'credit',
-        category: 'RENT_CHARGE',
-        metadata: {
-          tenantName: tenant.name,
-          unit: tenant.unit,
-        },
-        createdAt: periodStart,
-        transactionDate: periodStart,
-      });
-    }
-  });
-
-  // Step 4: Get totals grouped by category for the period
   const totalsResult = await getLedgerTotalsByCategory({
     propertyId,
     landlordId,
@@ -132,31 +385,20 @@ export const generateLandlordStatement = async ({
     periodEnd,
   });
 
-  // Step 5: Organize totals by category for statement rendering
-  // Exclude REVERSAL category from display (reversals still affect balance via ledger math)
   const allTotalsByCategory = totalsResult.totalsByCategory || {};
   const categorySummary = STATEMENT_CATEGORIES.reduce((acc, category) => {
-    if (allTotalsByCategory[category]) {
-      acc[category] = allTotalsByCategory[category];
-    } else {
-      acc[category] = {
-        count: 0,
-        totalAmount: 0,
-        totalDebit: 0,
-        totalCredit: 0,
-      };
-    }
+    acc[category] = allTotalsByCategory[category] || {
+      count: 0,
+      totalAmount: 0,
+      totalDebit: 0,
+      totalCredit: 0,
+    };
     return acc;
   }, {});
 
-  // Step 6: Apply commission deduction using property recognition basis when
-  // no explicit COMMISSION_CHARGE was posted in ledger for the period.
   const property = await Property.findById(propertyId)
-    .select("commissionPercentage commissionRecognitionBasis")
+    .select("business propertyName name commissionPercentage commissionRecognitionBasis landlords")
     .lean();
-
-  const commissionPct = Number(property?.commissionPercentage || 0);
-  const recognitionBasis = String(property?.commissionRecognitionBasis || "received").toLowerCase();
 
   const rentInvoiced = toAbs(categorySummary.RENT_CHARGE?.totalAmount);
   const rentReceivedManager = toAbs(categorySummary.RENT_RECEIPT_MANAGER?.totalAmount);
@@ -164,13 +406,12 @@ export const generateLandlordStatement = async ({
     toAbs(categorySummary.RENT_RECEIPT_MANAGER?.totalAmount) +
     toAbs(categorySummary.RENT_RECEIPT_LANDLORD?.totalAmount);
 
+  const recognitionBasis = String(property?.commissionRecognitionBasis || "received").toLowerCase();
   let commissionBase = rentReceivedAll;
-  if (recognitionBasis === "invoiced") {
-    commissionBase = rentInvoiced;
-  } else if (recognitionBasis === "received_manager_only") {
-    commissionBase = rentReceivedManager;
-  }
+  if (recognitionBasis === "invoiced") commissionBase = rentInvoiced;
+  if (recognitionBasis === "received_manager_only") commissionBase = rentReceivedManager;
 
+  const commissionPct = Number(property?.commissionPercentage || 0);
   const existingCommission = toAbs(categorySummary.COMMISSION_CHARGE?.totalAmount);
   const computedCommission = commissionPct > 0 ? round2((commissionBase * commissionPct) / 100) : 0;
   const effectiveCommission = existingCommission > 0 ? existingCommission : computedCommission;
@@ -184,8 +425,6 @@ export const generateLandlordStatement = async ({
     };
   }
 
-  // Step 7: Calculate periodNet from totalsByCategory
-  // For accrual mode, ensure periodNet is calculated from invoiced rent minus expenses and commission
   let periodNet;
   if (recognitionBasis === "invoiced") {
     const expenses =
@@ -205,10 +444,9 @@ export const generateLandlordStatement = async ({
     );
   }
 
-  // Step 8: Compute closing balance
   const closingBalance = openingBalance + periodNet;
+  const workspace = await buildScheduleWorkspace({ propertyId, landlordId, periodStart, periodEnd, property });
 
-  // Step 9: Return structured statement object
   return {
     propertyId,
     landlordId,
@@ -222,21 +460,12 @@ export const generateLandlordStatement = async ({
     currency: "KES",
     generatedAt: new Date(),
     source: "ledger",
+    metadata: {
+      workspace,
+    },
   };
 };
 
-/**
- * Generate statements for all landlords in a property for a specific period.
- * Useful for batch statement generation.
- * 
- * @param {Object} params - Batch generation parameters
- * @param {string|ObjectId} params.propertyId - Property ID
- * @param {Array<string|ObjectId>} params.landlordIds - Array of landlord IDs
- * @param {Date|string} params.statementPeriodStart - Period start date
- * @param {Date|string} params.statementPeriodEnd - Period end date
- * 
- * @returns {Promise<Array<Object>>} Array of statement objects
- */
 export const generateStatementsForProperty = async ({
   propertyId,
   landlordIds,
@@ -247,7 +476,7 @@ export const generateStatementsForProperty = async ({
     throw new Error("generateStatementsForProperty requires propertyId and array of landlordIds");
   }
 
-  const statements = await Promise.all(
+  return Promise.all(
     landlordIds.map((landlordId) =>
       generateLandlordStatement({
         propertyId,
@@ -257,66 +486,4 @@ export const generateStatementsForProperty = async ({
       })
     )
   );
-
-  return statements;
-};
-
-/**
- * Validate statement integrity by comparing ledger-derived balances.
- * Returns validation result with any discrepancies found.
- * 
- * @param {Object} statement - Statement object from generateLandlordStatement
- * @returns {Object} Validation result with status and any errors
- */
-export const validateStatementIntegrity = (statement) => {
-  const errors = [];
-
-  // Verify closing balance calculation
-  const expectedClosing = statement.openingBalance + statement.periodNet;
-  if (Math.abs(expectedClosing - statement.closingBalance) > 0.01) {
-    errors.push({
-      type: "closing_balance_mismatch",
-      expected: expectedClosing,
-      actual: statement.closingBalance,
-      difference: Math.abs(expectedClosing - statement.closingBalance),
-    });
-  }
-
-  // Verify periodNet matches sum of totalsByCategory
-  // Note: This should always be true since periodNet is derived from totalsByCategory
-  const categorySum = Object.values(statement.totalsByCategory).reduce(
-    (sum, cat) => sum + Number(cat.totalAmount || 0),
-    0
-  );
-
-  if (Math.abs(categorySum - statement.periodNet) > 0.01) {
-    errors.push({
-      type: "period_net_category_mismatch",
-      expected: categorySum,
-      actual: statement.periodNet,
-      difference: Math.abs(categorySum - statement.periodNet),
-    });
-  }
-
-  // Note: We do NOT validate that entries sum to periodNet because:
-  // - entries include REVERSAL category entries (needed for audit trail)
-  // - totalsByCategory excludes REVERSAL (not displayed to landlord)
-  // - Both approaches are mathematically valid; they may differ if reversals exist
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    statement: {
-      propertyId: statement.propertyId,
-      landlordId: statement.landlordId,
-      periodStart: statement.periodStart,
-      periodEnd: statement.periodEnd,
-    },
-  };
-};
-
-export default {
-  generateLandlordStatement,
-  generateStatementsForProperty,
-  validateStatementIntegrity,
 };

@@ -7,7 +7,7 @@ import { createError } from "../../utils/error.js";
  */
 export const payLandlord = async (req, res, next) => {
   try {
-    const { statementId, paymentDate, amount, paymentMethod, referenceNumber, notes } = req.body;
+    const { statementId, paymentDate, amount, paymentMethod, cashbook, referenceNumber, notes } = req.body;
     const businessId = req.user.company;
 
     if (!statementId) {
@@ -35,6 +35,7 @@ export const payLandlord = async (req, res, next) => {
     statement.paymentMethod = paymentMethod || "Bank Transfer";
     statement.paymentReference = referenceNumber || "";
     statement.paymentNotes = notes || "";
+    statement.metadata = { ...(statement.metadata || {}), paymentCashbook: cashbook || "" };
     statement.paidBy = req.user._id || req.user.id;
 
     await statement.save();
@@ -66,7 +67,7 @@ export const payLandlord = async (req, res, next) => {
       dueDate: new Date(),
       paidDate: new Date(),
       reference: statement._id,
-      narration: `Landlord payment for statement ${statement._id}`,
+      narration: `Landlord payment for statement ${statement._id}${cashbook ? ` from ${cashbook}` : ""}`,
       approvedBy: req.user._id || req.user.id,
       approvedAt: new Date(),
       paidBy: req.user._id || req.user.id,
@@ -91,7 +92,7 @@ export const payLandlord = async (req, res, next) => {
       direction: "debit",
       payer: "manager",
       receiver: "landlord",
-      notes: `Landlord payment voucher ${voucherNo}`,
+      notes: `Landlord payment voucher ${voucherNo}${cashbook ? ` via ${cashbook}` : ""}`,
       createdBy: req.user._id || req.user.id,
       approvedBy: req.user._id || req.user.id,
       approvedAt: new Date(),
@@ -112,7 +113,7 @@ export const payLandlord = async (req, res, next) => {
       direction: "credit",
       payer: "manager",
       receiver: "bank",
-      notes: `Landlord payment voucher ${voucherNo}`,
+      notes: `Landlord payment voucher ${voucherNo}${cashbook ? ` via ${cashbook}` : ""}`,
       createdBy: req.user._id || req.user.id,
       approvedBy: req.user._id || req.user.id,
       approvedAt: new Date(),

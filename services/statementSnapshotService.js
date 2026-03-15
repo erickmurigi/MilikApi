@@ -110,6 +110,7 @@ export const createDraftStatement = async ({
     metadata: {
       generatedBy: userId,
       entryCount: statementData.entries.length,
+      ...(statementData.metadata || {}),
     },
   });
 
@@ -236,6 +237,7 @@ export const refreshDraftStatement = async (statementId, userId, notes = "") => 
   }
   draft.metadata = {
     ...(draft.metadata || {}),
+    ...(statementData.metadata || {}),
     refreshedBy: userId,
     refreshedAt: new Date(),
     entryCount: statementData.entries.length,
